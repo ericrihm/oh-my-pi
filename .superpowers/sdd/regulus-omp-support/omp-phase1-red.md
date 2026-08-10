@@ -104,15 +104,27 @@ All 23 Phase 1 failures stop at absent Phase 1 contracts or their first observab
 
 ## Phase 2 RED quarantine
 
-Strict provider execution, sealed `ResolvedStrictRouteSelection`, prewalk suppression, lifecycle callbacks, and review-receipt contracts are intentionally isolated from the Phase 1 green gate in `packages/coding-agent/test/extensibility/task-router-phase2.test.ts`. Phase 1 asserts only complete decision validation/order and the hidden route handoff. The oversized receipt test runs end to end through actual `TaskTool` and `runSubprocess`/`finalizeRunResult` wiring with multibyte sentinel-bearing output above 500,000 bytes. It requires the `SingleResult.output` and parent/model preview to be truncated while the trusted receipt digest, byte count, and reviewer frame retain the complete finalized UTF-8 writer output.
+Strict provider execution, sealed `ResolvedStrictRouteSelection`, prewalk suppression, lifecycle callbacks, and review-receipt contracts are intentionally isolated from the Phase 1 green gate in `packages/coding-agent/test/extensibility/task-router-phase2.test.ts`. Phase 1 asserts only complete decision validation/order and the hidden route handoff. The oversized receipt fixture emits a terminal yield with `useLastTurn: true`, so the multibyte sentinel-bearing assistant output above 500,000 bytes enters the actual `TaskTool` and `runSubprocess`/`finalizeRunResult` path without a null-yield warning.
+
+The focused oversized-output run proves `SingleResult.output` is truncated before reaching the intended missing receipt/review-frame contract: its truncation, head removal, and tail retention assertions pass, as do the smaller model-preview and no-null-warning assertions. The RED failure is then the absent second routed request (`getProbe().requests[1]?.items?.[0]`), where the future receipt-linked `reviewTarget` must appear.
+
+```text
+$ PI_COMPILED=1 /Users/eric/.cache/omp-bun/node_modules/.bin/bun test packages/coding-agent/test/extensibility/task-router-phase2.test.ts --test-name-pattern "captures finalized full UTF-8 writer bytes"
+exit 1
+0 pass
+9 filtered out
+1 fail
+11 expect() calls
+Ran 1 test across 1 file. [766.00ms]
+```
 
 ```text
 $ PI_COMPILED=1 /Users/eric/.cache/omp-bun/node_modules/.bin/bun test packages/coding-agent/test/extensibility/task-router-phase2.test.ts
 exit 1
 0 pass
 10 fail
-16 expect() calls
-Ran 10 tests across 1 file. [2.01s]
+26 expect() calls
+Ran 10 tests across 1 file. [1087.00ms]
 ```
 
 These ten Phase 2 failures are recorded now but are not part of the Phase 1 green criterion. They cover successful sealed-selection execution, strict effort/vendor/max-effort/live-auth refusal, delayed and failed lifecycle callbacks, once-only settlement, end-to-end writer/reviewer framing, and full-output receipt capture before `truncateTail`.

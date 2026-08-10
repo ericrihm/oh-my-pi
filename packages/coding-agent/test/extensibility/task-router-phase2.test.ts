@@ -164,7 +164,7 @@ function yieldingExecutorSession(output: string, prompts: string[]): AgentSessio
 				toolName: "yield",
 				result: {
 					content: [{ type: "text", text: "Result submitted." }],
-					details: { status: "success" },
+					details: { status: "success", useLastTurn: true },
 				},
 				isError: false,
 			} as AgentSessionEvent);
@@ -556,7 +556,7 @@ describe("task router SDK bridge", () => {
 		const modelPreview = firstText(writerCall);
 		expect(Buffer.byteLength(modelPreview)).toBeLessThan(Buffer.byteLength(writerOutput));
 		expect(modelPreview).not.toContain("WRITER_HEAD_MUST_SURVIVE_IN_RECEIPT");
-		expect(modelPreview).toContain("WRITER_TAIL_MUST_SURVIVE_IN_PREVIEW");
+		expect(modelPreview).not.toContain("SYSTEM WARNING: Subagent called yield with null data.");
 
 		await tool.execute("oversized-reviewer", {
 			agent: "scout",
