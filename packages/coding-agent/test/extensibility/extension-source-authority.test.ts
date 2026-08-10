@@ -322,6 +322,44 @@ describe("extension source authority", () => {
 		expect(mutationSucceeded).toBe(false);
 		expect(request.items[0].task).toBe("Original");
 	});
+	it("freezes mutable descendants beneath a shallow-frozen request root", async () => {
+		let mutationSucceeded = false;
+		const extension = await loadExtensionFromFactory(
+			pi => {
+				pi.registerTaskRouter({
+					id: "shallow-frozen-request",
+					apiVersion: 1,
+					route: request => {
+						expect(Object.isFrozen(request)).toBe(true);
+						expect(Object.isFrozen(request.items)).toBe(true);
+						expect(Object.isFrozen(request.items[0])).toBe(true);
+						mutationSucceeded = Reflect.set(request.items[0] as object, "task", "Mutated");
+						return null;
+					},
+				});
+			},
+			cwd,
+			new EventBus(),
+			new ExtensionRuntime(),
+		);
+		const request = Object.freeze({
+			taskCwd: cwd,
+			invocationKind: "batch" as const,
+			items: [
+				{
+					index: 0,
+					agent: "task",
+					task: "Original",
+					routingContext: {},
+				},
+			],
+		});
+
+		await extension.taskRouter?.registration.route(request, {} as never);
+
+		expect(mutationSucceeded).toBe(false);
+		expect(request.items[0].task).toBe("Original");
+	});
 	it("keeps standalone configured files outside package authority", async () => {
 		const discovered: unknown = await discoverExtensionSources([standaloneEntry], cwd, undefined, { ambient: false });
 		if (!Array.isArray(discovered)) throw new Error("expected extension source descriptors");

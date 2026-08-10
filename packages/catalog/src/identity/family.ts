@@ -268,6 +268,17 @@ export const modelFamilyToken = memo((modelId: string): string => {
 	if (isMimoModelIdOrName(modelId)) return "mimo";
 	if (isGemmaModelId(modelId)) return "gemma";
 	if (parseGlmModel(bareModelId(modelId))) return "glm";
+	if (/(^|[/.])(?:deep-research|gemini)(?:[-.:_]|$)/i.test(modelId)) return "gemini";
+	if (/(^|[/.])moonshot(?:[-.:_]|$)/i.test(modelId)) return "kimi";
+	if (/(^|\/)grok(?:[-.:_]|$)/i.test(modelId)) return "grok";
+	if (
+		/(^|\/)(?:(?:labs|open)-)?(?:codestral|devstral|magistral|ministral|mistral|mixtral|pixtral|voxtral)(?:[-.:_]|$)/i.test(
+			modelId,
+		)
+	)
+		return "mistral";
+	if (/(^|[/.])llama[-.:_]?\d/i.test(modelId) || /(^|\/)muse-spark(?:[-.:_]|$)/i.test(modelId)) return "meta";
+	if (/(^|\/)groq\/compound(?:[-.:_]|$)/i.test(modelId)) return "groq";
 	return "";
 });
 
@@ -278,8 +289,12 @@ const MODEL_LINE_VENDOR_IDS: Readonly<Record<string, string>> = {
 	gemma: "google",
 	gemini: "google",
 	glm: "zhipu",
+	grok: "xai",
+	meta: "meta",
+	mistral: "mistral",
 	"gpt-oss": "openai",
 	kimi: "moonshot",
+	groq: "groq",
 	minimax: "minimax",
 	mimo: "xiaomi",
 	openai: "openai",
@@ -291,15 +306,27 @@ const PROVIDER_VENDOR_IDS: Readonly<Record<string, string>> = {
 	deepseek: "deepseek",
 	"google-antigravity": "google",
 	"google-gemini-cli": "google",
+	devin: "devin",
+	groq: "groq",
 	google: "google",
 	"kimi-code": "moonshot",
 	minimax: "minimax",
+	meta: "meta",
+	"minimax-cn": "minimax",
+	"minimax-code": "minimax",
+	"minimax-code-cn": "minimax",
+	mistral: "mistral",
 	moonshot: "moonshot",
 	openai: "openai",
 	"qwen-portal": "alibaba",
 	xiaomi: "xiaomi",
 	zai: "zhipu",
 	"zhipu-coding-plan": "zhipu",
+	"openai-codex": "openai",
+	xai: "xai",
+	sakana: "sakana",
+	umans: "umans",
+	"xai-oauth": "xai",
 };
 
 /**

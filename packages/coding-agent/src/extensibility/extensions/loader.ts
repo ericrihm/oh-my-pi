@@ -59,10 +59,12 @@ installLegacyPiSpecifierShim();
 type HandlerFn = (...args: unknown[]) => Promise<unknown>;
 type LoadedExtensionModule = ExtensionFactory | { default?: ExtensionFactory };
 
-function deepFreeze<T>(value: T): T {
-	if (value === null || typeof value !== "object" || Object.isFrozen(value)) return value;
-	for (const nested of Object.values(value)) deepFreeze(nested);
-	return Object.freeze(value);
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+	if (value === null || typeof value !== "object" || seen.has(value)) return value;
+	seen.add(value);
+	for (const nested of Object.values(value)) deepFreeze(nested, seen);
+	if (!Object.isFrozen(value)) Object.freeze(value);
+	return value;
 }
 
 function getExtensionFactory(module: LoadedExtensionModule): ExtensionFactory | null {

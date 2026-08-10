@@ -59,8 +59,9 @@ Range size: 14 files changed, 430 insertions, 178 deletions.
 - Extension discovery retains package root, name, version, manifest, load kind, and packaged-versus-standalone authority instead of flattening entries to strings.
 - Manifest setting grammar and defaults are validated during source discovery. Standalone configured files do not receive inferred package authority.
 - SDK session reconstruction accepts source descriptors and rebinds extension factories to the child session without discarding package authority.
-- `ctx.models.resolveSelection()` waits for in-flight discovery, refreshes the selected provider with caller cancellation, re-resolves from the post-refresh registry snapshot, probes the credential store live, and returns canonical provider/model identity plus exact effort. Catalog-owned `stableModelVendorId()` maps canonical vendor IDs independently of comparison-only `family()` tokens and refuses unknown identity.
-- Router invocation requests are deep-readonly in the public API and deep-frozen at runtime. The closed v1 per-item safe context is `routingContext: { sharedContext?: string }`; it carries only the existing model-authored shared task context, and Regulus must exclude it from classification.
+- `ctx.models.resolveSelection()` waits for in-flight discovery, refreshes the selected provider with caller cancellation, re-resolves from the post-refresh registry snapshot, probes the credential store live, and returns canonical provider/model identity plus exact effort. Real `ModelRegistry` background and provider discovery awaits race caller cancellation without coupling shared background work to one caller.
+- Catalog-owned `stableModelVendorId()` maps canonical vendor IDs independently of comparison-only `family()` tokens and refuses unknown identity. Its catalog coverage includes current first-party rows and portable xAI/Grok, Mistral, and Meta model lines.
+- Router invocation requests are deep-readonly in the public API and recursively frozen at runtime, including mutable descendants below an already-frozen parent. The closed v1 per-item safe context is `routingContext: { sharedContext?: string }`; it carries only the existing model-authored shared task context, and Regulus must exclude it from classification.
 
 This phase does not connect the registered router to TaskTool execution.
 
@@ -101,10 +102,10 @@ The model-query tests cover compatibility plus post-refresh re-resolution, cance
 ```text
 $ PI_COMPILED=1 /Users/eric/.cache/omp-bun/node_modules/.bin/bun test packages/coding-agent/test/extensibility/extension-source-authority.test.ts
 exit 1
-5 pass
+6 pass
 3 fail
-21 expect() calls
-Ran 8 tests across 1 file. [1131.00ms]
+26 expect() calls
+Ran 9 tests across 1 file. [1259.00ms]
 ```
 
 Expected deferred failures:
@@ -149,7 +150,7 @@ These expected REDs cover sealed strict-selection execution; exact effort, vendo
 $ cd /Users/eric/dev/oh-my-pi-regulus-omp-support/packages/coding-agent && PATH=/Users/eric/.cache/omp-bun/node_modules/.bin:$PATH PI_COMPILED=1 /Users/eric/.cache/omp-bun/node_modules/.bin/bun run check
 exit 0
 $ biome check . && bun run check:types
-Checked 2578 files in 1633ms. No fixes applied.
+Checked 2578 files in 1219ms. No fixes applied.
 $ tsgo -p tsconfig.json --noEmit
 ```
 
@@ -159,13 +160,54 @@ $ tsgo -p tsconfig.json --noEmit
 $ cd /Users/eric/dev/oh-my-pi-regulus-omp-support/packages/catalog && PATH=/Users/eric/.cache/omp-bun/node_modules/.bin:$PATH PI_COMPILED=1 /Users/eric/.cache/omp-bun/node_modules/.bin/bun run check
 exit 0
 $ biome check . && bun run check:types
-Checked 134 files in 76ms. No fixes applied.
+Checked 134 files in 74ms. No fixes applied.
 $ tsgo -p tsconfig.json --noEmit
+```
+
+## Review fix round 2
+
+The new tests were observed RED before the production fixes:
+
+- a shallow-frozen request root reached the router with mutable `items`;
+- real non-cooperative registry discovery left both cancellation promises pending after abort;
+- catalog coverage returned `null` for the bundled Meta row and portable xAI/Grok rows.
+
+Fresh GREEN evidence:
+
+```text
+$ PI_COMPILED=1 /Users/eric/.cache/omp-bun/node_modules/.bin/bun test packages/catalog/test/identity-family.test.ts
+exit 0
+32 pass
+0 fail
+743 expect() calls
+Ran 32 tests across 1 file. [69.00ms]
+
+$ PI_COMPILED=1 /Users/eric/.cache/omp-bun/node_modules/.bin/bun test packages/coding-agent/test/config/model-registry.test.ts
+exit 0
+10 pass
+0 fail
+13 expect() calls
+Ran 10 tests across 1 file. [1.53s]
+
+$ PI_COMPILED=1 /Users/eric/.cache/omp-bun/node_modules/.bin/bun test packages/coding-agent/test/extensibility/ext-model-query.test.ts
+exit 0
+12 pass
+0 fail
+29 expect() calls
+Ran 12 tests across 1 file. [185.00ms]
+
+$ PI_COMPILED=1 /Users/eric/.cache/omp-bun/node_modules/.bin/bun test packages/coding-agent/test/extensibility/extension-source-authority.test.ts --test-name-pattern 'deep-freezes|shallow-frozen'
+exit 0
+2 pass
+7 filtered out
+0 fail
+13 expect() calls
+Ran 2 tests across 1 file. [643.00ms]
 ```
 
 ## No-paid evidence
 
-No provider CLI, hosted inference command, or model invocation was run. The recorded commands are local `git`, `bun test`, Biome, and `tsgo` commands. The model-selection tests use fixture registries and mocked credential probes; the RED router tests mock executor/session boundaries. No test output reports a network request or provider execution.
+No provider CLI, hosted inference command, or model invocation was run. The recorded commands are local `git`, `bun test`, Biome, and `tsgo` commands. Model-selection tests use fixture registries and mocked credential probes. Real-registry cancellation tests inject a local non-cooperative fetch promise and never issue an outbound request. The RED router tests mock executor/session boundaries. No test output reports a network request or provider execution.
 
 ## Deferred scope
 

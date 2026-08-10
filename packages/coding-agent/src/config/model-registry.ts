@@ -14,6 +14,7 @@ import type {
 	SimpleStreamOptions,
 	ThinkingConfig,
 } from "@oh-my-pi/pi-ai/types";
+import { raceWithSignal } from "@oh-my-pi/pi-ai/utils/abort";
 import type { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { readModelCache } from "@oh-my-pi/pi-catalog/model-cache";
@@ -302,8 +303,10 @@ export class ModelRegistry {
 	 * remain swallowed by `refreshInBackground`'s existing `.catch`.
 	 */
 	async awaitBackgroundRefresh(options?: { signal?: AbortSignal }): Promise<void> {
-		options?.signal?.throwIfAborted();
-		if (this.#backgroundRefresh) await this.#backgroundRefresh;
+		if (this.#backgroundRefresh) {
+			await raceWithSignal(this.#backgroundRefresh, options?.signal);
+			return;
+		}
 		options?.signal?.throwIfAborted();
 	}
 
@@ -320,7 +323,7 @@ export class ModelRegistry {
 			}
 		}
 		options?.signal?.throwIfAborted();
-		await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]));
+		await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]), options?.signal);
 		options?.signal?.throwIfAborted();
 		// #reloadStaticModels above may have rebuilt #models from static sources,
 		// dropping models previously discovered by OTHER runtime providers (their
@@ -332,7 +335,7 @@ export class ModelRegistry {
 			[...this.#runtimeModelManagers.keys()].filter(runtimeId => runtimeId !== providerId),
 		);
 		if (otherRuntimeProviderIds.size > 0) {
-			await this.#refreshRuntimeDiscoveries("online-if-uncached", otherRuntimeProviderIds);
+			await this.#refreshRuntimeDiscoveries("online-if-uncached", otherRuntimeProviderIds, options?.signal);
 			options?.signal?.throwIfAborted();
 		}
 		options?.signal?.throwIfAborted();
@@ -1030,6 +1033,7 @@ export class ModelRegistry {
 	async #refreshRuntimeDiscoveries(
 		strategy: ModelRefreshStrategy,
 		providerFilter?: ReadonlySet<string>,
+		signal?: AbortSignal,
 	): Promise<void> {
 		const disabledProviders = getDisabledProviderIdsFromSettings();
 		const selectedDiscoverableProviders = (
@@ -1043,10 +1047,10 @@ export class ModelRegistry {
 				: Promise.all(
 						selectedDiscoverableProviders.map(provider => this.#discoverProviderModels(provider, strategy)),
 					).then(results => results.flat());
-		const [configuredDiscovered, builtInDiscovery] = await Promise.all([
-			configuredDiscoveriesPromise,
-			this.#discoverBuiltInProviderModels(strategy, providerFilter),
-		]);
+		const [configuredDiscovered, builtInDiscovery] = await raceWithSignal(
+			Promise.all([configuredDiscoveriesPromise, this.#discoverBuiltInProviderModels(strategy, providerFilter)]),
+			signal,
+		);
 		const discovered = [...configuredDiscovered, ...builtInDiscovery.models];
 		if (discovered.length === 0 && builtInDiscovery.authoritativeProviders.size === 0) {
 			return;

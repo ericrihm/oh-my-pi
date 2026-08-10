@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
@@ -11,8 +11,10 @@ function createStubAuthStorage(): AuthStorage {
 	const stub = {
 		setFallbackResolver: () => {},
 		clearConfigApiKeys: () => {},
+		setConfigApiKey: () => {},
 		hasAuth: () => false,
 		getApiKey: async () => undefined,
+		peekApiKey: async () => "sk-test",
 	};
 	return stub as unknown as AuthStorage;
 }
@@ -48,6 +50,32 @@ describe("ModelRegistry", () => {
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
+	function createHangingDiscoveryRegistry() {
+		const modelsPath = path.join(tmpDir, "hanging-models.yaml");
+		writeFileSync(
+			modelsPath,
+			[
+				"providers:",
+				"  slow-provider:",
+				"    baseUrl: https://slow.example/v1",
+				"    apiKey: sk-test",
+				"    api: openai-completions",
+				"    auth: apiKey",
+				"    discovery:",
+				"      type: openai-models-list",
+			].join("\n"),
+		);
+		const fetchStarted = Promise.withResolvers<void>();
+		const response = Promise.withResolvers<Response>();
+		const hangingRegistry = new ModelRegistry(createStubAuthStorage(), modelsPath, {
+			fetch: () => {
+				fetchStarted.resolve();
+				return response.promise;
+			},
+		});
+		return { hangingRegistry, fetchStarted: fetchStarted.promise, response };
+	}
+
 	test("resolves immediately when no background refresh is in flight", async () => {
 		// No refreshInBackground() called → #backgroundRefresh is undefined.
 		// The awaiter must settle within a single microtask, never hanging.
@@ -82,6 +110,41 @@ describe("ModelRegistry", () => {
 
 		await awaitPromise;
 		expect(settled).toBe(true);
+	});
+	test("awaitBackgroundRefresh aborts promptly during real non-cooperative discovery", async () => {
+		const { hangingRegistry, fetchStarted, response } = createHangingDiscoveryRegistry();
+		hangingRegistry.refreshInBackground("online");
+		await fetchStarted;
+		const controller = new AbortController();
+		const reason = new DOMException("Route cancelled", "AbortError");
+		const awaited = hangingRegistry.awaitBackgroundRefresh({ signal: controller.signal });
+		let rejection: unknown;
+		const observed = awaited.catch(error => {
+			rejection = error;
+		});
+		controller.abort(reason);
+		for (let i = 0; i < 5; i++) await Promise.resolve();
+		expect(rejection).toBe(reason);
+		response.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+		await observed;
+		await hangingRegistry.awaitBackgroundRefresh();
+	});
+
+	test("refreshProvider aborts promptly during real non-cooperative discovery", async () => {
+		const { hangingRegistry, fetchStarted, response } = createHangingDiscoveryRegistry();
+		const controller = new AbortController();
+		const reason = new DOMException("Route cancelled", "AbortError");
+		const refresh = hangingRegistry.refreshProvider("slow-provider", "online", { signal: controller.signal });
+		await fetchStarted;
+		let rejection: unknown;
+		const observed = refresh.catch(error => {
+			rejection = error;
+		});
+		controller.abort(reason);
+		for (let i = 0; i < 5; i++) await Promise.resolve();
+		expect(rejection).toBe(reason);
+		response.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+		await observed;
 	});
 
 	test("resolves even when the underlying refresh rejects (refreshInBackground swallows)", async () => {

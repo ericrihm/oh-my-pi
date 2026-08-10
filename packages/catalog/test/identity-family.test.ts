@@ -17,6 +17,7 @@ import {
 	supportsAdaptiveThinkingDisplay,
 	supportsMidConversationSystemMessages,
 } from "@oh-my-pi/pi-catalog/identity";
+import { type GeneratedProvider, getBundledModels } from "@oh-my-pi/pi-catalog/models";
 
 describe("isKimiModelId", () => {
 	test("matches Kimi namespace and delimiter forms", () => {
@@ -301,8 +302,72 @@ describe("stableModelVendorId", () => {
 	test("refuses unknown identity instead of persisting family or provider guesses", () => {
 		expect(stableModelVendorId("some-unknown-model", "custom-proxy")).toBeNull();
 	});
-});
 
+	test("covers every bundled row from known first-party providers", () => {
+		const providers: ReadonlyArray<readonly [GeneratedProvider, string]> = [
+			["anthropic", "anthropic"],
+			["deepseek", "deepseek"],
+			["google", "google"],
+			["google-gemini-cli", "google"],
+			["devin", "devin"],
+			["kimi-code", "moonshot"],
+			["meta", "meta"],
+			["minimax", "minimax"],
+			["minimax-cn", "minimax"],
+			["minimax-code", "minimax"],
+			["minimax-code-cn", "minimax"],
+			["mistral", "mistral"],
+			["moonshot", "moonshot"],
+			["openai", "openai"],
+			["openai-codex", "openai"],
+			["qwen-portal", "alibaba"],
+			["xai", "xai"],
+			["xai-oauth", "xai"],
+			["xiaomi", "xiaomi"],
+			["xiaomi-token-plan-ams", "xiaomi"],
+			["xiaomi-token-plan-cn", "xiaomi"],
+			["xiaomi-token-plan-sgp", "xiaomi"],
+			["sakana", "sakana"],
+			["zhipu-coding-plan", "zhipu"],
+		];
+
+		for (const [provider, vendor] of providers) {
+			const rows = getBundledModels(provider);
+			expect(rows.length).toBeGreaterThan(0);
+			for (const model of rows) {
+				expect(stableModelVendorId(model.id, model.provider)).toBe(vendor);
+			}
+		}
+	});
+	test("recognizes portable first-party model lines through proxy providers", () => {
+		const portableProviders: ReadonlyArray<readonly [GeneratedProvider, string]> = [
+			["anthropic", "anthropic"],
+			["deepseek", "deepseek"],
+			["google", "google"],
+			["meta", "meta"],
+			["minimax", "minimax"],
+			["mistral", "mistral"],
+			["moonshot", "moonshot"],
+			["openai", "openai"],
+			["xai", "xai"],
+			["xai-oauth", "xai"],
+			["xiaomi", "xiaomi"],
+			["zhipu-coding-plan", "zhipu"],
+		];
+		for (const [provider, vendor] of portableProviders) {
+			for (const model of getBundledModels(provider)) {
+				expect(stableModelVendorId(model.id, "openrouter")).toBe(vendor);
+			}
+		}
+	});
+	test("identifies every bundled row on mixed first-party routing providers", () => {
+		for (const provider of ["groq", "umans"] as const satisfies readonly GeneratedProvider[]) {
+			for (const model of getBundledModels(provider)) {
+				expect(stableModelVendorId(model.id, model.provider)).not.toBeNull();
+			}
+		}
+	});
+});
 describe("isGrokReasoningEffortCapable", () => {
 	test("matches effort-capable Grok SKUs across namespaces", () => {
 		expect(isGrokReasoningEffortCapable("grok-4.3")).toBe(true);
