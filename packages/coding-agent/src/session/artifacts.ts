@@ -6,6 +6,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { FanoutArchiveManager } from "./fanout-archive";
 
 /**
  * Sanitize a tool name for safe use as the middle segment of the artifact
@@ -25,6 +26,17 @@ function sanitizeToolType(toolType: string): string {
 	return sanitized.length > 0 ? sanitized : "tool";
 }
 
+interface ArtifactArchiveReader {
+	archivedArtifactIds(): Promise<readonly string[]>;
+	resolveArchivedArtifact(id: string): Promise<string | undefined>;
+}
+
+interface ArtifactManagerDependencies {
+	readdir?(dir: string): Promise<string[]>;
+	mkdir?(dir: string, options: { recursive: true }): Promise<void>;
+	archiveManager?: ArtifactArchiveReader;
+}
+
 /**
  * Manages artifact storage for a session.
  *
@@ -40,12 +52,14 @@ export class ArtifactManager {
 	readonly #dir: string;
 	#dirCreated = false;
 	#initPromise: Promise<void> | null = null;
+	readonly #dependencies: ArtifactManagerDependencies | undefined;
 
 	/**
 	 * @param dir Directory that will hold artifact files. Created lazily on first save.
 	 */
-	constructor(dir: string) {
+	constructor(dir: string, dependencies?: ArtifactManagerDependencies) {
 		this.#dir = dir;
+		this.#dependencies = dependencies;
 	}
 
 	/**
@@ -58,7 +72,8 @@ export class ArtifactManager {
 
 	async #ensureDir(): Promise<void> {
 		if (!this.#dirCreated) {
-			await fs.mkdir(this.#dir, { recursive: true });
+			await (this.#dependencies?.mkdir?.(this.#dir, { recursive: true }) ??
+				fs.mkdir(this.#dir, { recursive: true }));
 			this.#dirCreated = true;
 		}
 		// Memoize the first-use scan so it runs exactly once. Concurrent callers
@@ -74,6 +89,9 @@ export class ArtifactManager {
 	 */
 	async #scanExistingIds(): Promise<void> {
 		const files = await this.listFiles();
+		const archivedIds = await (
+			this.#dependencies?.archiveManager ?? FanoutArchiveManager.forParent(this.#dir)
+		).archivedArtifactIds();
 		let maxId = -1;
 		for (const file of files) {
 			// Files are named: {id}.{toolType}.log
@@ -82,6 +100,10 @@ export class ArtifactManager {
 				const id = parseInt(match[1], 10);
 				if (id > maxId) maxId = id;
 			}
+		}
+		for (const id of archivedIds) {
+			const numericId = parseInt(id, 10);
+			if (numericId > maxId) maxId = numericId;
 		}
 		this.#nextId = maxId + 1;
 	}
@@ -134,7 +156,7 @@ export class ArtifactManager {
 	 */
 	async listFiles(): Promise<string[]> {
 		try {
-			return await fs.readdir(this.#dir);
+			return await (this.#dependencies?.readdir?.(this.#dir) ?? fs.readdir(this.#dir));
 		} catch {
 			return [];
 		}
@@ -149,6 +171,11 @@ export class ArtifactManager {
 	async getPath(id: string): Promise<string | null> {
 		const files = await this.listFiles();
 		const match = files.find(f => f.startsWith(`${id}.`));
-		return match ? path.join(this.#dir, match) : null;
+		if (match) return path.join(this.#dir, match);
+		return (
+			(await (
+				this.#dependencies?.archiveManager ?? FanoutArchiveManager.forParent(this.#dir)
+			).resolveArchivedArtifact(id)) ?? null
+		);
 	}
 }

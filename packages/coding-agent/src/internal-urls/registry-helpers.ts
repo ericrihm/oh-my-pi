@@ -8,6 +8,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { AgentRegistry } from "../registry/agent-registry";
+import { FanoutArchiveManager } from "../session/fanout-archive";
 
 const extraArtifactsDirs = new Set<string>();
 
@@ -76,6 +77,7 @@ export async function sessionFilesFromDisk(): Promise<Map<string, string>> {
 		}
 		for (const entry of entries) {
 			if (entry.isDirectory()) {
+				if (entry.name === ".fanout-archive") continue;
 				await scan(path.join(dir, entry.name), depth + 1);
 				continue;
 			}
@@ -113,6 +115,9 @@ export async function hasResolvableTranscript(agentId: string): Promise<boolean>
 		const files = await sessionFilesFromDisk();
 		for (const id of files.keys()) {
 			if (id.toLowerCase() === lower) return true;
+		}
+		for (const dir of artifactsDirsFromRegistry()) {
+			if (await FanoutArchiveManager.forParent(dir).resolveArchivedTranscript(agentId)) return true;
 		}
 	} catch {
 		// Availability probing is advisory; any filesystem failure means the

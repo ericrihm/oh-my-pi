@@ -21,6 +21,7 @@ import {
 import type { StructuredSubagentSchemaMode } from "../task/types";
 import { ArtifactManager } from "./artifacts";
 import { type BlobPutOptions, type BlobPutResult, BlobStore } from "./blob-store";
+import { FanoutArchiveManager } from "./fanout-archive";
 import {
 	type BashExecutionMessage,
 	type CustomMessage,
@@ -297,7 +298,11 @@ class SessionEntryIndex {
 		const roots: SessionTreeNode[] = [];
 
 		for (const entry of entries) {
-			nodes.set(entry.id, { entry, children: [], label: this.#labels.get(entry.id) });
+			nodes.set(entry.id, {
+				entry,
+				children: [],
+				label: this.#labels.get(entry.id),
+			});
 		}
 
 		for (const entry of entries) {
@@ -506,6 +511,8 @@ export class SessionManager {
 	#adoptedArtifactManager: ArtifactManager | null = null;
 	#inMemoryArtifacts: Map<string, string> | null = null;
 	#inMemoryArtifactCounter = 0;
+	#fanoutArchiveManager: FanoutArchiveManager | null = null;
+	#fanoutArchiveParentArtifactsDir: string | null = null;
 
 	#suppressBreadcrumb = false;
 	/**
@@ -1066,6 +1073,7 @@ export class SessionManager {
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
 		this.#adoptedArtifactManager = null;
+		this.#clearFanoutArchiveManager();
 		this.#inMemoryArtifacts = null;
 		this.#inMemoryArtifactCounter = 0;
 
@@ -1091,7 +1099,11 @@ export class SessionManager {
 		this.#index.rebuild(entries);
 	}
 
-	#freshEntryFields(): { id: string; parentId: string | null; timestamp: string } {
+	#freshEntryFields(): {
+		id: string;
+		parentId: string | null;
+		timestamp: string;
+	} {
 		return {
 			id: generateId(this.#index),
 			parentId: this.#index.leafId(),
@@ -1110,7 +1122,9 @@ export class SessionManager {
 
 	#recordEntry(entry: SessionEntry): void {
 		if (this.#released) {
-			logger.warn("Dropped session entry appended after terminal release", { type: entry.type });
+			logger.warn("Dropped session entry appended after terminal release", {
+				type: entry.type,
+			});
 			return;
 		}
 		this.#entries.push(entry);
@@ -1181,6 +1195,7 @@ export class SessionManager {
 		if (!sessionFile) {
 			this.#artifactManager = null;
 			this.#artifactManagerSessionFile = null;
+			this.#clearFanoutArchiveManager();
 			return null;
 		}
 
@@ -1191,12 +1206,19 @@ export class SessionManager {
 		return this.#artifactManager;
 	}
 
+	#clearFanoutArchiveManager(): void {
+		this.#fanoutArchiveManager = null;
+		this.#fanoutArchiveParentArtifactsDir = null;
+	}
+
 	#notifySessionNameListeners(): void {
 		for (const callback of [...this.#sessionNameChangedCallbacks]) {
 			try {
 				callback();
 			} catch (err) {
-				logger.warn("SessionManager: session name change hook failed", { error: String(err) });
+				logger.warn("SessionManager: session name change hook failed", {
+					error: String(err),
+				});
 			}
 		}
 	}
@@ -1279,6 +1301,7 @@ export class SessionManager {
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
 		this.#adoptedArtifactManager = null;
+		this.#clearFanoutArchiveManager();
 
 		if (this.#sessionFile) this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
 	}
@@ -1332,6 +1355,7 @@ export class SessionManager {
 		this.#forceFileCreation = true;
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
+		this.#clearFanoutArchiveManager();
 
 		if (this.sanitizeLoadedOpenAIResponsesReplayMetadata()) this.#rewriteRequired = true;
 	}
@@ -1389,6 +1413,7 @@ export class SessionManager {
 		this.#draftOnlySessionCleanupArmed = false;
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
+		this.#clearFanoutArchiveManager();
 		this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
 
 		await this.#rewriteAtomically();
@@ -1495,6 +1520,7 @@ export class SessionManager {
 				this.#sessionFile = newSessionFile;
 				this.#artifactManager = null;
 				this.#artifactManagerSessionFile = null;
+				this.#clearFanoutArchiveManager();
 				// Path is repointed; hot-path appends may use `#sessionFile` again.
 				this.#sessionFileRelocating = null;
 			}
@@ -1705,7 +1731,10 @@ export class SessionManager {
 			this.#draftOnlySessionCleanupArmed = false;
 		} catch (err) {
 			if (!isEnoent(err)) {
-				logger.warn("Failed to drop empty session on close", { sessionFile, error: String(err) });
+				logger.warn("Failed to drop empty session on close", {
+					sessionFile,
+					error: String(err),
+				});
 			}
 		}
 	}
@@ -1830,7 +1859,10 @@ export class SessionManager {
 
 	/** Seed additional directories from settings or a passed list. Also called on resumed sessions with --add-dir; persists the updated header when the session file is already durable. No-op when the normalized list is unchanged (avoids rewriting large session files on every startup). */
 	async setAdditionalDirectories(directories: string[]): Promise<void> {
-		const workspace = normalizeSessionWorkspace({ cwd: this.#cwd, directories });
+		const workspace = normalizeSessionWorkspace({
+			cwd: this.#cwd,
+			directories,
+		});
 		const next = additionalWorkspaceDirectories(workspace);
 		if (
 			next.length === this.#additionalDirectories.length &&
@@ -1868,7 +1900,11 @@ export class SessionManager {
 
 	getTurnBudget(): { total: number | null; spent: number; hard: boolean } {
 		const mainOutput = Math.max(0, this.#index.usageSnapshot().output - this.#turnOutputBaseline);
-		return { total: this.#turnBudgetTotal, spent: mainOutput + this.#turnEvalOutput, hard: this.#turnBudgetHard };
+		return {
+			total: this.#turnBudgetTotal,
+			spent: mainOutput + this.#turnEvalOutput,
+			hard: this.#turnBudgetHard,
+		};
 	}
 
 	getSessionDir(): string {
@@ -1888,8 +1924,25 @@ export class SessionManager {
 		return artifactsDirectoryFor(this.#sessionFile);
 	}
 
+	getFanoutArchiveManager(): FanoutArchiveManager | null {
+		const parentArtifactsDir = this.getArtifactsDir();
+		if (!parentArtifactsDir) {
+			this.#clearFanoutArchiveManager();
+			return null;
+		}
+
+		if (this.#fanoutArchiveManager && this.#fanoutArchiveParentArtifactsDir === parentArtifactsDir) {
+			return this.#fanoutArchiveManager;
+		}
+
+		this.#fanoutArchiveManager = FanoutArchiveManager.forParent(parentArtifactsDir);
+		this.#fanoutArchiveParentArtifactsDir = parentArtifactsDir;
+		return this.#fanoutArchiveManager;
+	}
+
 	adoptArtifactManager(manager: ArtifactManager): void {
 		this.#adoptedArtifactManager = manager;
+		this.#clearFanoutArchiveManager();
 	}
 
 	getArtifactManager(): ArtifactManager | null {
@@ -2013,7 +2066,11 @@ export class SessionManager {
 		this.#entries.push(entry);
 		this.#index.insert(entry);
 		this.#notifyEntryAppended(entry);
-		await this.#persistTitleChangeEntry(entry, { title, source, updatedAt: timestamp });
+		await this.#persistTitleChangeEntry(entry, {
+			title,
+			source,
+			updatedAt: timestamp,
+		});
 
 		this.#notifySessionNameListeners();
 		return true;
@@ -2033,7 +2090,10 @@ export class SessionManager {
 	 * guests must not share references).
 	 */
 	snapshotForReplication(): { header: SessionHeader; entries: SessionEntry[] } {
-		return { header: structuredClone(this.#header), entries: structuredClone(this.#entries) as SessionEntry[] };
+		return {
+			header: structuredClone(this.#header),
+			entries: structuredClone(this.#entries) as SessionEntry[],
+		};
 	}
 
 	/**
@@ -2050,7 +2110,11 @@ export class SessionManager {
 			| PythonExecutionMessage
 			| FileMentionMessage,
 	): string {
-		const entry: SessionMessageEntry = { type: "message", ...this.#freshEntryFields(), message };
+		const entry: SessionMessageEntry = {
+			type: "message",
+			...this.#freshEntryFields(),
+			message,
+		};
 		this.#recordEntry(entry);
 		return entry.id;
 	}
@@ -2096,13 +2160,22 @@ export class SessionManager {
 	}
 
 	appendServiceTierChange(serviceTier: ServiceTierByFamily | null): string {
-		const entry: ServiceTierChangeEntry = { type: "service_tier_change", ...this.#freshEntryFields(), serviceTier };
+		const entry: ServiceTierChangeEntry = {
+			type: "service_tier_change",
+			...this.#freshEntryFields(),
+			serviceTier,
+		};
 		this.#recordEntry(entry);
 		return entry.id;
 	}
 
 	appendModeChange(mode: string, data?: Record<string, unknown>): string {
-		const entry: ModeChangeEntry = { type: "mode_change", ...this.#freshEntryFields(), mode, data };
+		const entry: ModeChangeEntry = {
+			type: "mode_change",
+			...this.#freshEntryFields(),
+			mode,
+			data,
+		};
 		this.#recordEntry(entry);
 		return entry.id;
 	}
@@ -2139,7 +2212,11 @@ export class SessionManager {
 		spawns?: string;
 		readSummarize?: boolean;
 	}): string {
-		const entry: SessionInitEntry = { type: "session_init", ...this.#freshEntryFields(), ...init };
+		const entry: SessionInitEntry = {
+			type: "session_init",
+			...this.#freshEntryFields(),
+			...init,
+		};
 		this.#recordEntry(entry);
 		return entry.id;
 	}
@@ -2175,13 +2252,21 @@ export class SessionManager {
 	 * `transcript:true` export walks it unchanged).
 	 */
 	appendResetBoundary(): string {
-		const entry: ResetBoundaryEntry = { type: "reset_boundary", ...this.#freshEntryFields() };
+		const entry: ResetBoundaryEntry = {
+			type: "reset_boundary",
+			...this.#freshEntryFields(),
+		};
 		this.#recordEntry(entry);
 		return entry.id;
 	}
 
 	appendCustomEntry(customType: string, data?: unknown): string {
-		const entry: CustomEntry = { type: "custom", customType, data, ...this.#freshEntryFields() };
+		const entry: CustomEntry = {
+			type: "custom",
+			customType,
+			data,
+			...this.#freshEntryFields(),
+		};
 		this.#recordEntry(entry);
 		return entry.id;
 	}
@@ -2210,7 +2295,13 @@ export class SessionManager {
 		details?: T,
 		attribution: MessageAttribution | undefined = "agent",
 	): string {
-		const normalized = normalizeCustomMessagePayload<T>({ customType, content, display, details, attribution });
+		const normalized = normalizeCustomMessagePayload<T>({
+			customType,
+			content,
+			display,
+			details,
+			attribution,
+		});
 		const entry: CustomMessageEntry<T> = {
 			type: "custom_message",
 			customType: normalized.customType,
@@ -2272,7 +2363,10 @@ export class SessionManager {
 		const pins = new Map<string, { hash: string; lastUsedAt: number }>();
 		for (const entry of this.getBranch()) {
 			if (entry.type === "credential_pin") {
-				pins.set(entry.provider, { hash: entry.hash, lastUsedAt: new Date(entry.timestamp).getTime() });
+				pins.set(entry.provider, {
+					hash: entry.hash,
+					lastUsedAt: new Date(entry.timestamp).getTime(),
+				});
 			} else if (entry.type === "message" && entry.message.role === "assistant") {
 				const pin = pins.get(entry.message.provider);
 				if (pin) pin.lastUsedAt = Math.max(pin.lastUsedAt, entry.message.timestamp);
@@ -2321,7 +2415,12 @@ export class SessionManager {
 	appendLabelChange(targetId: string, label: string | undefined): string {
 		if (!this.#index.has(targetId)) throw new Error(`Entry ${targetId} not found`);
 
-		const entry: LabelEntry = { type: "label", ...this.#freshEntryFields(), targetId, label };
+		const entry: LabelEntry = {
+			type: "label",
+			...this.#freshEntryFields(),
+			targetId,
+			label,
+		};
 		this.#recordEntry(entry);
 		return entry.id;
 	}
@@ -2735,7 +2834,10 @@ export class SessionManager {
 					breadcrumbCwdMissing &&
 					(newestInTargetDir === null || (newestIsBreadcrumb && !currentProjectAlreadyHasSession));
 				if (looksLikeMovedProject) {
-					logger.info("Re-rooting moved session", { from: breadcrumbCwd, to: resolvedCwd });
+					logger.info("Re-rooting moved session", {
+						from: breadcrumbCwd,
+						to: resolvedCwd,
+					});
 					// Anchor at the gone breadcrumb cwd so the moveTo below relocates the
 					// session: open() now falls back to the launch cwd for a missing
 					// recorded cwd, which would no-op moveTo when it equals `cwd`.
@@ -2806,6 +2908,9 @@ export async function cleanupEmptyMoveSession(
 	try {
 		await sessionManager.dropSession(sessionFile);
 	} catch (err) {
-		logger.warn("Failed to clean up empty move session", { sessionFile, error: String(err) });
+		logger.warn("Failed to clean up empty move session", {
+			sessionFile,
+			error: String(err),
+		});
 	}
 }

@@ -35,11 +35,19 @@ import {
 
 export type AgentReviver = (expected: AgentRef) => Promise<AgentSession>;
 
+export interface TerminalArchiveScheduler {
+	archiveTerminalChildren(): Promise<unknown>;
+}
+
 const AGENT_RELEASE_GRACE_MS = 5000;
 
-async function persistAgentTombstone(sessionFile: string): Promise<void> {
+export async function persistAgentTombstone(sessionFile: string): Promise<void> {
 	try {
-		await fs.writeFile(getAgentTombstonePath(sessionFile), "", { encoding: "utf8", flag: "wx", mode: 0o600 });
+		await fs.writeFile(getAgentTombstonePath(sessionFile), "", {
+			encoding: "utf8",
+			flag: "wx",
+			mode: 0o600,
+		});
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 	}
@@ -59,12 +67,15 @@ export interface AdoptOptions {
 	idleTtlMs: number;
 	/** Recreates a live AgentSession from the ref's sessionFile. Absent => not resumable after park (e.g. isolated runs). */
 	revive?: AgentReviver;
+	/** Parent-owned terminal archive scheduler retained for later hub/collab kills. */
+	terminalArchiveScheduler?: TerminalArchiveScheduler;
 }
 
 interface AdoptedAgent {
 	ref: AgentRef;
 	idleTtlMs: number;
 	revive?: AgentReviver;
+	terminalArchiveScheduler?: TerminalArchiveScheduler;
 	timer?: NodeJS.Timeout;
 }
 
@@ -125,12 +136,18 @@ export class AgentLifecycleManager {
 	readonly #revivals = new Map<string, RevivingAgent>();
 	#unsubscribe: (() => void) | undefined;
 	#persistedReviverFactory: PersistedSubagentReviverFactory | undefined;
+	readonly #scheduledTerminalArchives = new WeakSet<AgentRef>();
+	readonly #terminalArchiveSchedulers = new WeakMap<AgentRef, TerminalArchiveScheduler>();
 	/** TTL applied when a cold-revived ref is adopted on demand. */
 	#persistedReviveTtlMs = 0;
 
 	constructor(registry: AgentRegistry = AgentRegistry.global()) {
 		this.#registry = registry;
 		this.#unsubscribe = registry.onChange(event => this.#onRegistryEvent(event));
+	}
+
+	rememberTerminalArchiveScheduler(ref: AgentRef, scheduler: TerminalArchiveScheduler): void {
+		this.#terminalArchiveSchedulers.set(ref, scheduler);
 	}
 
 	/**
@@ -154,12 +171,20 @@ export class AgentLifecycleManager {
 		if (id === MAIN_AGENT_ID) return;
 		const ref = this.#registry.get(id);
 		if (!ref || (expected !== undefined && ref !== expected && ref.session !== expected)) {
-			logger.warn("AgentLifecycleManager.adopt: unknown or replaced agent id", { id });
+			logger.warn("AgentLifecycleManager.adopt: unknown or replaced agent id", {
+				id,
+			});
 			return;
 		}
 		const existing = this.#adopted.get(id);
 		clearTimeout(existing?.timer);
-		const adopted: AdoptedAgent = { ref, idleTtlMs: opts.idleTtlMs, revive: opts.revive };
+		const adopted: AdoptedAgent = {
+			ref,
+			idleTtlMs: opts.idleTtlMs,
+			revive: opts.revive,
+			terminalArchiveScheduler: opts.terminalArchiveScheduler,
+		};
+		if (opts.terminalArchiveScheduler) this.rememberTerminalArchiveScheduler(ref, opts.terminalArchiveScheduler);
 		this.#adopted.set(id, adopted);
 		this.#armTimer(id, adopted);
 	}
@@ -257,7 +282,10 @@ export class AgentLifecycleManager {
 				try {
 					await session.dispose();
 				} catch (error) {
-					logger.warn("AgentLifecycleManager.park: session dispose failed", { id, error: String(error) });
+					logger.warn("AgentLifecycleManager.park: session dispose failed", {
+						id,
+						error: String(error),
+					});
 				}
 			} finally {
 				// Only clear if we are still the in-flight entry (a later park would
@@ -370,7 +398,14 @@ export class AgentLifecycleManager {
 	 * on-disk transcript as a fresh `parked` row. Mirrors
 	 * `finalizeSubagentLifecycle`'s genuine-kill path.
 	 */
-	async release(id: string, expected?: AgentRefExpectation, options?: { tombstone?: boolean }): Promise<boolean> {
+	async release(
+		id: string,
+		expected?: AgentRefExpectation,
+		options?: {
+			tombstone?: boolean;
+			terminalArchiveScheduler?: TerminalArchiveScheduler;
+		},
+	): Promise<boolean> {
 		const adopted = this.#adopted.get(id);
 		const current = this.#registry.get(id);
 		const currentMatches =
@@ -379,6 +414,10 @@ export class AgentLifecycleManager {
 			adopted && (expected === undefined || adopted.ref === expected || adopted.ref.session === expected);
 		const ref = currentMatches ? current : adoptedMatches ? adopted.ref : undefined;
 		if (!ref) return false;
+		const terminalArchiveScheduler =
+			options?.terminalArchiveScheduler ??
+			adopted?.terminalArchiveScheduler ??
+			this.#terminalArchiveSchedulers.get(ref);
 		if (adopted?.ref === ref) {
 			clearTimeout(adopted.timer);
 			this.#adopted.delete(id);
@@ -391,24 +430,58 @@ export class AgentLifecycleManager {
 			await park.promise;
 		}
 
-		if (options?.tombstone) {
-			// Persist the terminal decision before detaching the session. The
-			// sidecar prevents a later discovery pass from reviving this transcript
-			// as a fresh parked ref.
-			if (ref.sessionFile) await persistAgentTombstone(ref.sessionFile);
-			this.#registry.setStatus(id, "aborted", ref);
-		}
 		const live = this.#registry.get(id) === ref ? ref.session : null;
-		if (options?.tombstone) this.#registry.detachSession(id, ref);
+		if (options?.tombstone) {
+			if (live) {
+				// Wrapped session disposal unregisters non-terminal refs. Guard the
+				// ref as terminal without emitting until disposal succeeds, so a
+				// failed dispose remains attached/retryable while observers only
+				// ever receive `aborted` after the session has been detached.
+				const previousStatus = ref.status;
+				ref.status = "aborted";
+				try {
+					await live.dispose();
+				} catch (error) {
+					ref.status = previousStatus;
+					logger.warn("AgentLifecycleManager.release: session dispose failed", {
+						id,
+						error: String(error),
+					});
+					throw error;
+				}
+				ref.status = previousStatus;
+			}
+			this.#registry.detachSession(id, ref);
+			this.#registry.setStatus(id, "aborted", ref);
+			if (ref.sessionFile) {
+				await persistAgentTombstone(ref.sessionFile);
+				this.#scheduleTerminalArchive(ref, terminalArchiveScheduler);
+			}
+			return true;
+		}
 		if (live) {
 			try {
 				await live.dispose();
 			} catch (error) {
-				logger.warn("AgentLifecycleManager.release: session dispose failed", { id, error: String(error) });
+				logger.warn("AgentLifecycleManager.release: session dispose failed", {
+					id,
+					error: String(error),
+				});
 			}
 		}
-		if (!options?.tombstone) this.#registry.unregister(id, ref);
+		this.#registry.unregister(id, ref);
 		return true;
+	}
+
+	#scheduleTerminalArchive(ref: AgentRef, scheduler?: TerminalArchiveScheduler): void {
+		if (!scheduler || this.#scheduledTerminalArchives.has(ref)) return;
+		this.#scheduledTerminalArchives.add(ref);
+		void scheduler.archiveTerminalChildren().catch(error => {
+			logger.warn("AgentLifecycleManager.release: failed to archive terminal child", {
+				id: ref.id,
+				error: String(error),
+			});
+		});
 	}
 
 	/** Teardown everything (process exit / main session dispose). */

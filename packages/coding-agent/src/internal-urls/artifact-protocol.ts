@@ -12,6 +12,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
+import { FanoutArchiveManager } from "../session/fanout-archive";
 import { artifactsDirsFromRegistry } from "./registry-helpers";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, UrlCompletion } from "./types";
 
@@ -72,6 +73,13 @@ export async function resolveArtifactFile(url: InternalUrl, context?: ResolveCon
 			foundPath = path.join(dir, match);
 			break;
 		}
+		if (pinnedDir === dir) {
+			const archivedPath = await FanoutArchiveManager.forParent(dir).resolveArchivedArtifact(id);
+			if (archivedPath) {
+				foundPath = archivedPath;
+				break;
+			}
+		}
 		for (const f of files) {
 			const m = f.match(/^(\d+)\./);
 			if (m) availableIds.add(m[1]);
@@ -80,6 +88,17 @@ export async function resolveArtifactFile(url: InternalUrl, context?: ResolveCon
 
 	if (!anyDirExists) {
 		throw new Error("No artifacts directory found");
+	}
+
+	if (!foundPath) {
+		for (const dir of dirs) {
+			if (dir === pinnedDir) continue;
+			const archivedPath = await FanoutArchiveManager.forParent(dir).resolveArchivedArtifact(id);
+			if (archivedPath) {
+				foundPath = archivedPath;
+				break;
+			}
+		}
 	}
 
 	if (!foundPath) {
@@ -133,7 +152,8 @@ export class ArtifactProtocolHandler implements ProtocolHandler {
 
 	async complete(): Promise<UrlCompletion[]> {
 		const ids = new Set<string>();
-		for (const dir of artifactsDirsFromRegistry()) {
+		const dirs = artifactsDirsFromRegistry();
+		for (const dir of dirs) {
 			let files: string[];
 			try {
 				files = await fs.readdir(dir);
@@ -145,6 +165,9 @@ export class ArtifactProtocolHandler implements ProtocolHandler {
 				const m = f.match(/^(\d+)\./);
 				if (m) ids.add(m[1]!);
 			}
+		}
+		for (const dir of dirs) {
+			for (const id of await FanoutArchiveManager.forParent(dir).archivedArtifactIds()) ids.add(id);
 		}
 		return [...ids].sort((a, b) => Number(a) - Number(b)).map(value => ({ value }));
 	}

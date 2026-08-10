@@ -2,11 +2,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ADVISOR_TRANSCRIPT_FILENAME, isAdvisorTranscriptName } from "../advisor/transcript-recorder";
 import { resolveExplicitModelRole } from "../config/model-resolver";
+import { FanoutArchiveManager } from "../session/fanout-archive";
 import { EPHEMERAL_MODEL_CHANGE_ROLE } from "../session/session-entries";
 import { visitEntriesFromFileStream } from "../session/session-loader";
 import { loadBundledAgents } from "../task/agents";
 import { isReadOnlyAgent } from "../task/read-only-policy";
 import { persistedVibeChildIds } from "../vibe/runtime";
+import { AgentLifecycleManager } from "./agent-lifecycle";
 import {
 	type AgentHistorySummary,
 	type AgentMetricsSummary,
@@ -63,7 +65,11 @@ function finiteNumber(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function inferBundledAgent(systemPrompt: string): { agent?: string; modelRole?: string; readOnly?: boolean } {
+function inferBundledAgent(systemPrompt: string): {
+	agent?: string;
+	modelRole?: string;
+	readOnly?: boolean;
+} {
 	const matches = loadBundledAgents().filter(agent => {
 		const rolePrompt = agent.systemPrompt.trim();
 		return rolePrompt.length > 0 && systemPrompt.includes(rolePrompt);
@@ -327,6 +333,7 @@ async function registerPersistedSubagentsFromDir(
 	if (!shouldContinue()) return;
 	let entriesSinceYield = 0;
 	for (const entry of entries) {
+		if (entry.isDirectory() && entry.name === ".fanout-archive") continue;
 		if (!shouldContinue()) return;
 		if (++entriesSinceYield >= 16) {
 			entriesSinceYield = 0;
@@ -410,6 +417,13 @@ async function registerPersistedSubagentsFromDir(
 				createdAt: ref?.createdAt,
 				lastActivity: ref?.lastActivity,
 			});
+		}
+		const ref = registry.get(id);
+		if (ref?.sessionFile) {
+			AgentLifecycleManager.global().rememberTerminalArchiveScheduler(
+				ref,
+				FanoutArchiveManager.forParent(path.dirname(ref.sessionFile)),
+			);
 		}
 		await registerPersistedSubagentsFromDir(
 			registry,

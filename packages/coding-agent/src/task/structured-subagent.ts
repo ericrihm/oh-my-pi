@@ -16,6 +16,7 @@ import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
+import { FanoutArchiveManager, type FanoutArchiveReservation } from "../session/fanout-archive";
 import type { TaskEffort } from "../thinking";
 import type { ToolSession } from "../tools";
 import { isIrcEnabled } from "../tools/hub";
@@ -112,6 +113,8 @@ export interface StructuredSubagentRequest {
 	enableIrc?: boolean;
 	/** `0` disables executor wall-clock timeout. Undefined inherits settings. */
 	maxRuntimeMs?: number;
+	/** Shared persistent fanout capacity reserved by the outer task admission gate. */
+	fanoutReservation?: FanoutArchiveReservation;
 	signal?: AbortSignal;
 	onProgress?: (progress: AgentProgress) => void;
 }
@@ -159,7 +162,9 @@ export class StructuredSubagentError extends Error {
 const PLAN_MODE_TOOLS = ["read", "grep", "glob", "web_search"] as const;
 
 function renderSubagentPrompt(assignment: string): string {
-	return prompt.render(subagentUserPromptTemplate, { assignment: assignment.trim() });
+	return prompt.render(subagentUserPromptTemplate, {
+		assignment: assignment.trim(),
+	});
 }
 
 function trimToUndefined(value: string | undefined): string | undefined {
@@ -176,15 +181,35 @@ function sanitizeAgentId(value: string | undefined): string | undefined {
 function resolveSchema(request: StructuredSubagentRequest, agent: AgentDefinition): StructuredSubagentSchemaResolution {
 	const mode = request.schemaMode ?? request.session.outputSchemaMode ?? "permissive";
 	if (Object.hasOwn(request, "outputSchema")) {
-		return { schema: request.outputSchema, source: "caller", mode, outputSchemaOverridesAgent: true };
+		return {
+			schema: request.outputSchema,
+			source: "caller",
+			mode,
+			outputSchemaOverridesAgent: true,
+		};
 	}
 	if (agent.output !== undefined) {
-		return { schema: agent.output, source: "agent", mode, outputSchemaOverridesAgent: false };
+		return {
+			schema: agent.output,
+			source: "agent",
+			mode,
+			outputSchemaOverridesAgent: false,
+		};
 	}
 	if (request.session.outputSchema !== undefined) {
-		return { schema: request.session.outputSchema, source: "session", mode, outputSchemaOverridesAgent: false };
+		return {
+			schema: request.session.outputSchema,
+			source: "session",
+			mode,
+			outputSchemaOverridesAgent: false,
+		};
 	}
-	return { schema: undefined, source: "none", mode, outputSchemaOverridesAgent: false };
+	return {
+		schema: undefined,
+		source: "none",
+		mode,
+		outputSchemaOverridesAgent: false,
+	};
 }
 
 function createPlanModeAgent(agent: AgentDefinition): AgentDefinition {
@@ -352,14 +377,24 @@ async function leaseArtifacts(
 	if (sessionFile) {
 		const artifactsDir = sessionFile.slice(0, -6);
 		await fs.mkdir(artifactsDir, { recursive: true });
-		return { sessionFile, artifactsDir, temporary: false, unregister: undefined };
+		return {
+			sessionFile,
+			artifactsDir,
+			temporary: false,
+			unregister: undefined,
+		};
 	}
 	const artifactsDir = path.join(
 		os.tmpdir(),
 		`${invocationKind === "eval" ? "omp-eval-agent" : "omp-task"}-${Snowflake.next()}`,
 	);
 	await fs.mkdir(artifactsDir, { recursive: true });
-	return { sessionFile: null, artifactsDir, temporary: true, unregister: registerArtifactsDir(artifactsDir) };
+	return {
+		sessionFile: null,
+		artifactsDir,
+		temporary: true,
+		unregister: registerArtifactsDir(artifactsDir),
+	};
 }
 
 function resolveAutoloadSkills(session: ToolSession, agent: AgentDefinition) {
@@ -422,6 +457,7 @@ function buildExecutorOptions(
 		maxRuntimeMs: request.maxRuntimeMs,
 		restrictToolNames,
 		keepAlive: request.keepAlive,
+		terminalArchiveScheduler: lease.sessionFile ? FanoutArchiveManager.forParent(lease.artifactsDir) : undefined,
 		signal: request.signal,
 		eventBus: session.eventBus,
 		onProgress: request.onProgress,
@@ -545,25 +581,36 @@ function attachStructuredOutputMetadata(result: SingleResult, schema: Structured
  * lease or child dispatch; callers keep responsibility for their result text.
  */
 export async function runStructuredSubagent(request: StructuredSubagentRequest): Promise<StructuredSubagentResult> {
-	const policy = await resolveEffectiveSubagentPolicy(request);
-	const lease = await leaseArtifacts(request.session, request.invocationKind);
+	let policy: EffectiveSubagentPolicy | undefined;
+	let lease: ArtifactLease | undefined;
+	let claimedReservation = false;
+	let reservation: FanoutArchiveReservation | undefined;
 	let changesApplied: boolean | null = null;
 	let mergeSummary = "";
 	let requiresRecoveryArtifacts = false;
 	let completedSuccessfully = false;
 	let deferredCleanup: Promise<void> | undefined;
 	try {
+		const resolvedPolicy = await resolveEffectiveSubagentPolicy(request);
+		policy = resolvedPolicy;
+		request.signal?.throwIfAborted();
+		reservation = request.session.getSessionFile() ? request.fanoutReservation : undefined;
+		if (reservation) {
+			await reservation.claimChild();
+			claimedReservation = true;
+		}
+		lease = await leaseArtifacts(request.session, request.invocationKind);
 		const id = await reserveStructuredSubagentId(request.session, {
 			...request.identity,
 			label: request.identity?.label ?? (request.invocationKind === "eval" ? "EvalAgent" : undefined),
 		});
-		const baseOptions = buildExecutorOptions(request, policy, lease, id);
+		const baseOptions = buildExecutorOptions(request, resolvedPolicy, lease, id);
 		baseOptions.onCleanupDeferred = completion => {
 			deferredCleanup = completion;
 		};
-		baseOptions.planReference = await loadPlanReference(request, policy);
+		baseOptions.planReference = await loadPlanReference(request, resolvedPolicy);
 		let isolationContext: IsolationContext | null = null;
-		if (policy.isIsolated) {
+		if (resolvedPolicy.isIsolated) {
 			try {
 				isolationContext = await prepareIsolationContext(request.session.cwd);
 			} catch (error) {
@@ -582,22 +629,22 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 					context: isolationContext,
 					preferredBackend: parseIsolationMode(request.session.settings.get("task.isolation.mode")),
 					agentId: id,
-					mergeMode: policy.mergeMode,
+					mergeMode: resolvedPolicy.mergeMode,
 					artifactsDir: lease.artifactsDir,
 					description: trimToUndefined(request.identity?.label),
 					buildCommitMessage: makeIsolationCommitMessage(request.session),
-					buildFailureResult: buildFailureResult(request, policy, id, Date.now()),
+					buildFailureResult: buildFailureResult(request, resolvedPolicy, id, Date.now()),
 				});
-		attachStructuredOutputMetadata(result, policy.schema);
+		attachStructuredOutputMetadata(result, resolvedPolicy.schema);
 		requiresRecoveryArtifacts =
-			policy.isIsolated &&
+			resolvedPolicy.isIsolated &&
 			(result.exitCode !== 0 || result.error !== undefined || result.aborted === true) &&
 			(result.patchPath !== undefined || result.branchName !== undefined || (result.nestedPatches?.length ?? 0) > 0);
 
 		if (
-			policy.isIsolated &&
+			resolvedPolicy.isIsolated &&
 			isolationContext &&
-			policy.applyChanges &&
+			resolvedPolicy.applyChanges &&
 			result.exitCode === 0 &&
 			!result.error &&
 			!result.aborted
@@ -605,7 +652,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			const outcome = await mergeIsolatedChanges({
 				result,
 				repoRoot: isolationContext.repoRoot,
-				mergeMode: policy.mergeMode,
+				mergeMode: resolvedPolicy.mergeMode,
 			});
 			mergeSummary = outcome.summary;
 			changesApplied = outcome.changesApplied;
@@ -613,7 +660,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 				const nestedPatchSummary = await applyEligibleNestedPatches({
 					result,
 					repoRoot: isolationContext.repoRoot,
-					mergeMode: policy.mergeMode,
+					mergeMode: resolvedPolicy.mergeMode,
 					changesApplied: outcome.changesApplied,
 					mergedBranchForNestedPatches: outcome.mergedBranchForNestedPatches,
 					commitMessage: makeIsolationCommitMessage(request.session)(),
@@ -622,7 +669,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 				requiresRecoveryArtifacts ||=
 					nestedPatchSummary.includes("<system-notification>") && (result.nestedPatches?.length ?? 0) > 0;
 			}
-		} else if (policy.isIsolated && isolationContext && !policy.applyChanges) {
+		} else if (resolvedPolicy.isIsolated && isolationContext && !resolvedPolicy.applyChanges) {
 			if (result.branchName)
 				mergeSummary = `\n\nIsolation: changes captured on branch \`${result.branchName}\` (apply=false). Not merged.`;
 			else if (result.patchPath)
@@ -635,7 +682,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 		completedSuccessfully = result.exitCode === 0 && !result.error && !result.aborted;
 		return {
 			result,
-			policy,
+			policy: resolvedPolicy,
 			mergeSummary,
 			changesApplied,
 			artifactsDir: lease.artifactsDir,
@@ -649,22 +696,34 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			{ cause: error },
 		);
 	} finally {
-		const shouldRetainArtifacts =
-			(request.retainArtifacts && completedSuccessfully) ||
-			(policy.isIsolated && (!policy.applyChanges || changesApplied === false || requiresRecoveryArtifacts));
-		const shouldCleanup = lease.temporary && !shouldRetainArtifacts;
-		if (shouldCleanup) {
-			const cleanupArtifacts = async (): Promise<void> => {
-				await fs.rm(lease.artifactsDir, { recursive: true, force: true });
-				lease.unregister?.();
-			};
-			if (deferredCleanup) {
-				trackLateCleanup(deferredCleanup.then(cleanupArtifacts), {
-					resource: "artifacts",
-					artifactsDir: lease.artifactsDir,
-				});
-			} else {
-				await cleanupArtifacts();
+		const reservationToSettle =
+			reservation ?? (request.session.getSessionFile() ? request.fanoutReservation : undefined);
+		if (reservationToSettle) {
+			if (claimedReservation) reservationToSettle.settleChild();
+			else reservationToSettle.releaseUnclaimedChild();
+		}
+		if (policy && lease) {
+			const shouldRetainArtifacts =
+				(request.retainArtifacts && completedSuccessfully) ||
+				(policy.isIsolated && (!policy.applyChanges || changesApplied === false || requiresRecoveryArtifacts));
+			const shouldCleanup = lease.temporary && !shouldRetainArtifacts;
+			const cleanupLease = lease;
+			if (shouldCleanup) {
+				const cleanupArtifacts = async (): Promise<void> => {
+					await fs.rm(cleanupLease.artifactsDir, {
+						recursive: true,
+						force: true,
+					});
+					cleanupLease.unregister?.();
+				};
+				if (deferredCleanup) {
+					trackLateCleanup(deferredCleanup.then(cleanupArtifacts), {
+						resource: "artifacts",
+						artifactsDir: lease.artifactsDir,
+					});
+				} else {
+					await cleanupArtifacts();
+				}
 			}
 		}
 	}

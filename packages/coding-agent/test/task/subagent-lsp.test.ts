@@ -10,6 +10,7 @@ import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { FanoutArchiveManager } from "@oh-my-pi/pi-coding-agent/session/fanout-archive";
 import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import type { AgentDefinition, TaskParams } from "@oh-my-pi/pi-coding-agent/task/types";
@@ -20,7 +21,11 @@ import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import "@oh-my-pi/pi-coding-agent/tools/yield";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 
-const TEST_TASK: TaskParams = { agent: "task", name: "CheckLsp", task: "Inspect LSP tools." };
+const TEST_TASK: TaskParams = {
+	agent: "task",
+	name: "CheckLsp",
+	task: "Inspect LSP tools.",
+};
 
 function createAssistantStopMessage(text: string): AssistantMessage {
 	return {
@@ -104,6 +109,9 @@ function createSession(
 		getAvailable: () => [],
 		getApiKey: async () => null,
 	} as unknown as ModelRegistry;
+	const archiveManager = options.sessionFile
+		? FanoutArchiveManager.forParent(path.dirname(options.sessionFile), undefined, { fresh: true })
+		: undefined;
 
 	return {
 		cwd: "/tmp",
@@ -115,6 +123,7 @@ function createSession(
 			...(options.taskEnableLsp !== undefined ? { "task.enableLsp": options.taskEnableLsp } : {}),
 		}),
 		getSessionFile: () => options.sessionFile ?? null,
+		getFanoutArchiveManager: () => archiveManager,
 		getSessionSpawns: () => "*",
 		modelRegistry,
 		getPlanModeState: () => options.planMode,
@@ -128,7 +137,9 @@ function mockAgents(agent: AgentDefinition): void {
 	});
 }
 
-function mockCreateAgentSession(): { getOptions: () => CreateAgentSessionOptions | undefined } {
+function mockCreateAgentSession(): {
+	getOptions: () => CreateAgentSessionOptions | undefined;
+} {
 	let capturedOptions: CreateAgentSessionOptions | undefined;
 	vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async (options = {}) => {
 		capturedOptions = options;
@@ -164,7 +175,10 @@ function mockIsolation(): void {
 	vi.spyOn(worktreeModule, "getRepoRoot").mockResolvedValue("/repo");
 	vi.spyOn(worktreeModule, "captureBaseline").mockResolvedValue(baseline);
 	vi.spyOn(worktreeModule, "ensureIsolation").mockResolvedValue(isolationHandle);
-	vi.spyOn(worktreeModule, "captureDeltaPatch").mockResolvedValue({ rootPatch: "", nestedPatches: [] });
+	vi.spyOn(worktreeModule, "captureDeltaPatch").mockResolvedValue({
+		rootPatch: "",
+		nestedPatches: [],
+	});
 	vi.spyOn(worktreeModule, "cleanupIsolation").mockResolvedValue();
 }
 
@@ -253,7 +267,12 @@ describe("subagent LSP availability", () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-isolated-session-cwd-"));
 		try {
 			const parentSessionFile = path.join(tempDir, "parent.jsonl");
-			const tool = await TaskTool.create(createSession({ isolationMode: "auto", sessionFile: parentSessionFile }));
+			const tool = await TaskTool.create(
+				createSession({
+					isolationMode: "auto",
+					sessionFile: parentSessionFile,
+				}),
+			);
 			await tool.execute("tool-call", { ...TEST_TASK, isolated: true });
 
 			const sessionManager = getOptions()?.sessionManager as { getCwd?: () => string } | undefined;

@@ -37,7 +37,7 @@ import type { MnemopiSessionState } from "../mnemopi/state";
 import subagentAsyncPendingTemplate from "../prompts/system/subagent-async-pending.md" with { type: "text" };
 import subagentSystemPromptTemplate from "../prompts/system/subagent-system-prompt.md" with { type: "text" };
 import submitReminderTemplate from "../prompts/system/subagent-yield-reminder.md" with { type: "text" };
-import { AgentLifecycleManager, type AgentReviver } from "../registry/agent-lifecycle";
+import { AgentLifecycleManager, type AgentReviver, type TerminalArchiveScheduler } from "../registry/agent-lifecycle";
 import { AgentRegistry } from "../registry/agent-registry";
 import { type CreateAgentSessionOptions, createAgentSession, discoverAuthStorage } from "../sdk";
 import type { AgentSession, AgentSessionEvent, Prewalk } from "../session/agent-session";
@@ -485,6 +485,8 @@ export interface ExecutorOptions {
 	 * set this false so disposal unregisters them instead of leaving idle peers.
 	 */
 	keepAlive?: boolean;
+	/** Parent-specific archive scheduler retained with this child through lifecycle adoption. */
+	terminalArchiveScheduler?: TerminalArchiveScheduler;
 	/** Internal ownership handoff for cleanup that outlives the visible Task result. */
 	onCleanupDeferred?: (completion: Promise<void>) => void;
 }
@@ -627,9 +629,15 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 					validation && !validation.success
 						? summarizeValidationFailure(validation, completeData, validator?.requiredFields ?? [])
 						: assembled.schemaOverridden
-							? { message: SUBAGENT_WARNING_SCHEMA_OVERRIDDEN, missingRequired: [] }
+							? {
+									message: SUBAGENT_WARNING_SCHEMA_OVERRIDDEN,
+									missingRequired: [],
+								}
 							: schemaError
-								? { message: `invalid output schema: ${schemaError}`, missingRequired: [] }
+								? {
+										message: `invalid output schema: ${schemaError}`,
+										missingRequired: [],
+									}
 								: undefined;
 				if (includeStructuredOutput) {
 					structuredOutput =
@@ -642,7 +650,13 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 									error: schemaError ? `invalid output schema: ${schemaError}` : undefined,
 								}
 							: failure
-								? { source, mode, status: "invalid", data: completeData, error: failure.message }
+								? {
+										source,
+										mode,
+										status: "invalid",
+										data: completeData,
+										error: failure.message,
+									}
 								: { source, mode, status: "valid", data: completeData };
 				}
 				const mustReject =
@@ -681,11 +695,19 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		if (fallback) {
 			const { validator } = buildOutputValidator(outputSchema);
 			const completeData = parseStringifiedJson(fallback.data ?? null);
-			const result = validator?.validate(completeData) ?? { success: true as const };
+			const result = validator?.validate(completeData) ?? {
+				success: true as const,
+			};
 			if (!result.success) {
 				const summary = summarizeValidationFailure(result, completeData, validator?.requiredFields ?? []);
 				if (includeStructuredOutput) {
-					structuredOutput = { source, mode, status: "invalid", data: completeData, error: summary.message };
+					structuredOutput = {
+						source,
+						mode,
+						status: "invalid",
+						data: completeData,
+						error: summary.message,
+					};
 				}
 				const outcome = buildSchemaViolationOutcome(summary, completeData);
 				rawOutput = outcome.rawOutput;
@@ -722,7 +744,14 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		}
 	}
 
-	return { rawOutput, exitCode, stderr, abortedViaYield, hasYield, structuredOutput };
+	return {
+		rawOutput,
+		exitCode,
+		stderr,
+		abortedViaYield,
+		hasYield,
+		structuredOutput,
+	};
 }
 
 /**
@@ -818,7 +847,12 @@ export function createMCPProxyTools(mcpManager: MCPManager): CustomTool[] {
 					.find(t => t.mcpServerName === serverName && t.mcpToolName === mcpToolName);
 				if (!source?.execute) {
 					return {
-						content: [{ type: "text" as const, text: `MCP error: tool ${mcpToolName} no longer available` }],
+						content: [
+							{
+								type: "text" as const,
+								text: `MCP error: tool ${mcpToolName} no longer available`,
+							},
+						],
 						details: { serverName, mcpToolName, isError: true },
 					};
 				}
@@ -1588,7 +1622,11 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 								// never take down event processing (which escalates to terminate).
 								const notice = buildBudgetNotice(progress.requests, softRequestBudget);
 								void Promise.resolve()
-									.then(() => steerSession.sendUserMessage(notice, { deliverAs: "steer" }))
+									.then(() =>
+										steerSession.sendUserMessage(notice, {
+											deliverAs: "steer",
+										}),
+									)
 									.catch(err => {
 										logger.warn("Subagent budget steer failed", {
 											error: err instanceof Error ? err.message : String(err),
@@ -2073,7 +2111,13 @@ async function driveSessionToYield(
 
 interface FinalizeRunArgs {
 	monitor: SubagentRunMonitor;
-	done: { exitCode: number; error?: string; aborted?: boolean; abortReason?: string; durationMs: number };
+	done: {
+		exitCode: number;
+		error?: string;
+		aborted?: boolean;
+		abortReason?: string;
+		durationMs: number;
+	};
 	index: number;
 	id: string;
 	agent: AgentDefinition;
@@ -2392,6 +2436,7 @@ export async function finalizeSubagentLifecycle(args: {
 	isolated: boolean;
 	agentIdleTtlMs: number;
 	reviveSession: AgentReviver | null;
+	terminalArchiveScheduler?: TerminalArchiveScheduler;
 	cleanupDeadlineAt?: number;
 	onCleanupDeferred?: (completion: Promise<void>) => void;
 }): Promise<void> {
@@ -2427,9 +2472,15 @@ export async function finalizeSubagentLifecycle(args: {
 			// decision is durable and a restart cannot rediscover the transcript
 			// as a revivable parked agent.
 			try {
-				await AgentLifecycleManager.global().release(args.id, ref, { tombstone: true });
+				await AgentLifecycleManager.global().release(args.id, ref, {
+					tombstone: true,
+					terminalArchiveScheduler: args.terminalArchiveScheduler,
+				});
 			} catch (error) {
-				logger.warn("runSubagent: failed to persist kill tombstone", { id: args.id, error: String(error) });
+				logger.warn("runSubagent: failed to persist kill tombstone", {
+					id: args.id,
+					error: String(error),
+				});
 				registry.setStatus(args.id, "aborted", ref);
 				registry.detachSession(args.id, ref);
 				await disposeSession();
@@ -2470,6 +2521,7 @@ export async function finalizeSubagentLifecycle(args: {
 		{
 			idleTtlMs: args.agentIdleTtlMs,
 			revive: args.reviveSession ?? undefined,
+			terminalArchiveScheduler: args.terminalArchiveScheduler,
 		},
 		ref,
 	);
@@ -2571,7 +2623,11 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 
 	return finalizeRunResult({
 		monitor,
-		done: { ...outcome, abortReason: outcome.abortReasonText, durationMs: Date.now() - startTime },
+		done: {
+			...outcome,
+			abortReason: outcome.abortReasonText,
+			durationMs: Date.now() - startTime,
+		},
 		index,
 		id,
 		agent,
@@ -3223,7 +3279,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					},
 				);
 				extensionRunner.onError(err => {
-					logger.error("Extension error", { path: err.extensionPath, error: err.error });
+					logger.error("Extension error", {
+						path: err.extensionPath,
+						error: err.error,
+					});
 				});
 				await awaitAbortable(extensionRunner.emit({ type: "session_start" }));
 				while (pendingExtensionMessages.length > 0) {
@@ -3334,6 +3393,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					isolated: worktree !== undefined,
 					agentIdleTtlMs,
 					reviveSession,
+					terminalArchiveScheduler: options.terminalArchiveScheduler,
 					cleanupDeadlineAt,
 					onCleanupDeferred: completion => {
 						deferredSessionShutdown = completion;

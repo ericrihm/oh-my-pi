@@ -500,7 +500,11 @@ export const SETTINGS_SCHEMA = {
 			description:
 				"After an advisor concern or blocker interrupts, route further concerns/blockers non-interruptingly for this many primary turns.",
 			options: [
-				{ value: "0", label: "0 turns", description: "Allow every concern/blocker to interrupt." },
+				{
+					value: "0",
+					label: "0 turns",
+					description: "Allow every concern/blocker to interrupt.",
+				},
 				{ value: "1", label: "1 turn" },
 				{ value: "2", label: "2 turns" },
 				{ value: "3", label: "3 turns", description: "Default." },
@@ -613,9 +617,21 @@ export const SETTINGS_SCHEMA = {
 			label: "Symbol Preset",
 			description: "Glyph set for icons and symbols (Unicode, Nerd Font, or ASCII)",
 			options: [
-				{ value: "unicode", label: "Unicode", description: "Standard symbols (default)" },
-				{ value: "nerd", label: "Nerd Font", description: "Requires Nerd Font" },
-				{ value: "ascii", label: "ASCII", description: "Maximum compatibility" },
+				{
+					value: "unicode",
+					label: "Unicode",
+					description: "Standard symbols (default)",
+				},
+				{
+					value: "nerd",
+					label: "Nerd Font",
+					description: "Requires Nerd Font",
+				},
+				{
+					value: "ascii",
+					label: "ASCII",
+					description: "Maximum compatibility",
+				},
 			],
 		},
 	},
@@ -642,13 +658,41 @@ export const SETTINGS_SCHEMA = {
 			label: "Status Line Preset",
 			description: "Pre-built status line configurations",
 			options: [
-				{ value: "default", label: "Default", description: "Model, path, git, context, tokens, cost" },
-				{ value: "minimal", label: "Minimal", description: "Path and git only" },
-				{ value: "compact", label: "Compact", description: "Model, git, cost, context" },
-				{ value: "full", label: "Full", description: "All segments including time" },
-				{ value: "nerd", label: "Nerd", description: "Maximum info with Nerd Font icons" },
-				{ value: "ascii", label: "ASCII", description: "No special characters" },
-				{ value: "custom", label: "Custom", description: "User-defined segments" },
+				{
+					value: "default",
+					label: "Default",
+					description: "Model, path, git, context, tokens, cost",
+				},
+				{
+					value: "minimal",
+					label: "Minimal",
+					description: "Path and git only",
+				},
+				{
+					value: "compact",
+					label: "Compact",
+					description: "Model, git, cost, context",
+				},
+				{
+					value: "full",
+					label: "Full",
+					description: "All segments including time",
+				},
+				{
+					value: "nerd",
+					label: "Nerd",
+					description: "Maximum info with Nerd Font icons",
+				},
+				{
+					value: "ascii",
+					label: "ASCII",
+					description: "No special characters",
+				},
+				{
+					value: "custom",
+					label: "Custom",
+					description: "User-defined segments",
+				},
 			],
 		},
 	},
@@ -663,8 +707,16 @@ export const SETTINGS_SCHEMA = {
 			label: "Status Line Separator",
 			description: "Style of separators between segments",
 			options: [
-				{ value: "powerline", label: "Powerline", description: "Solid arrows (Nerd Font)" },
-				{ value: "powerline-thin", label: "Thin chevron", description: "Thin arrows (Nerd Font)" },
+				{
+					value: "powerline",
+					label: "Powerline",
+					description: "Solid arrows (Nerd Font)",
+				},
+				{
+					value: "powerline-thin",
+					label: "Thin chevron",
+					description: "Thin arrows (Nerd Font)",
+				},
 				{ value: "slash", label: "Slash", description: "Forward slashes" },
 				{ value: "pipe", label: "Pipe", description: "Vertical pipes" },
 				{ value: "block", label: "Block", description: "Solid blocks" },
@@ -761,7 +813,11 @@ export const SETTINGS_SCHEMA = {
 			description:
 				"Amount of head content kept inline alongside the tail when output spills to artifact (middle elision). 0 disables — keep tail only.",
 			options: [
-				{ value: "0", label: "0 KB", description: "Disabled; tail-only truncation" },
+				{
+					value: "0",
+					label: "0 KB",
+					description: "Disabled; tail-only truncation",
+				},
 				{ value: "1", label: "1 KB", description: "~250 tokens" },
 				{ value: "2.5", label: "2.5 KB", description: "~625 tokens" },
 				{ value: "5", label: "5 KB", description: "~1.25K tokens" },
@@ -805,7 +861,11 @@ export const SETTINGS_SCHEMA = {
 				{ value: "50", label: "50 lines", description: "~250 tokens" },
 				{ value: "100", label: "100 lines", description: "~500 tokens" },
 				{ value: "250", label: "250 lines", description: "~1.25K tokens" },
-				{ value: "500", label: "500 lines", description: "Default; ~2.5K tokens" },
+				{
+					value: "500",
+					label: "500 lines",
+					description: "Default; ~2.5K tokens",
+				},
 				{ value: "1000", label: "1000 lines", description: "~5K tokens" },
 				{ value: "2000", label: "2000 lines", description: "~10K tokens" },
 				{ value: "5000", label: "5000 lines", description: "~25K tokens" },
@@ -824,11 +884,20 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"statusLine.leftSegments": { type: "array", default: [] as StatusLineSegmentId[] },
+	"statusLine.leftSegments": {
+		type: "array",
+		default: [] as StatusLineSegmentId[],
+	},
 
-	"statusLine.rightSegments": { type: "array", default: [] as StatusLineSegmentId[] },
+	"statusLine.rightSegments": {
+		type: "array",
+		default: [] as StatusLineSegmentId[],
+	},
 
-	"statusLine.segmentOptions": { type: "record", default: {} as Record<string, unknown> },
+	"statusLine.segmentOptions": {
+		type: "record",
+		default: {} as Record<string, unknown>,
+	},
 
 	// Images and terminal
 	"terminal.showImages": {
@@ -1000,9 +1069,21 @@ export const SETTINGS_SCHEMA = {
 			label: "Shimmer",
 			description: "Animation style for working/loading messages",
 			options: [
-				{ value: "classic", label: "Classic", description: "Soft cosine wave sweeping across the text" },
-				{ value: "kitt", label: "KITT Scanner", description: "Knight Rider 1982 red light bouncing left-right" },
-				{ value: "disabled", label: "Disabled", description: "No animation; static muted text" },
+				{
+					value: "classic",
+					label: "Classic",
+					description: "Soft cosine wave sweeping across the text",
+				},
+				{
+					value: "kitt",
+					label: "KITT Scanner",
+					description: "Knight Rider 1982 red light bouncing left-right",
+				},
+				{
+					value: "disabled",
+					label: "Disabled",
+					description: "No animation; static muted text",
+				},
 			],
 		},
 	},
@@ -1222,8 +1303,16 @@ export const SETTINGS_SCHEMA = {
 					label: "Auto",
 					description: "Inline descriptors for Gemini models; keep them in tool schemas otherwise",
 				},
-				{ value: "on", label: "On", description: "Always inline descriptors in the system prompt" },
-				{ value: "off", label: "Off", description: "Keep descriptors in provider tool schemas only" },
+				{
+					value: "on",
+					label: "On",
+					description: "Always inline descriptors in the system prompt",
+				},
+				{
+					value: "off",
+					label: "Off",
+					description: "Keep descriptors in provider tool schemas only",
+				},
 			],
 		},
 	},
@@ -1288,7 +1377,11 @@ export const SETTINGS_SCHEMA = {
 					label: "Pragmatic",
 					description: "Direct, efficient engineer focused on clarity and rigor",
 				},
-				{ value: "none", label: "None", description: "Omit the personality block entirely" },
+				{
+					value: "none",
+					label: "None",
+					description: "Omit the personality block entirely",
+				},
 			],
 		},
 	},
@@ -1415,8 +1508,16 @@ export const SETTINGS_SCHEMA = {
 			description: "OpenAI Responses and Codex response verbosity (low, medium, or high)",
 			options: [
 				{ value: "low", label: "Low", description: "Prefer concise responses" },
-				{ value: "medium", label: "Medium", description: "Balance brevity and detail (default)" },
-				{ value: "high", label: "High", description: "Prefer detailed responses" },
+				{
+					value: "medium",
+					label: "Medium",
+					description: "Balance brevity and detail (default)",
+				},
+				{
+					value: "high",
+					label: "High",
+					description: "Prefer detailed responses",
+				},
 			],
 		},
 	},
@@ -1557,7 +1658,11 @@ export const SETTINGS_SCHEMA = {
 				"Treat a coding-plan model as near its limit below this remaining percentage. Unknown or unmapped usage keeps the primary model.",
 			condition: "usageAwareFallbackEnabled",
 			options: [
-				{ value: "5", label: "5%", description: "Act only when nearly exhausted" },
+				{
+					value: "5",
+					label: "5%",
+					description: "Act only when nearly exhausted",
+				},
 				{ value: "10", label: "10%", description: "Balanced safety margin" },
 				{ value: "15", label: "15%", description: "Conservative" },
 				{ value: "20", label: "20%", description: "Early protection" },
@@ -1620,7 +1725,11 @@ export const SETTINGS_SCHEMA = {
 					label: "Cooldown expiry",
 					description: "Return to the primary model after its suppression window ends",
 				},
-				{ value: "never", label: "Never", description: "Stay on the fallback model until manually changed" },
+				{
+					value: "never",
+					label: "Never",
+					description: "Stay on the fallback model until manually changed",
+				},
 			],
 		},
 	},
@@ -1698,7 +1807,11 @@ export const SETTINGS_SCHEMA = {
 					label: "Compact",
 					description: "Compact the session context, then re-submit the prompt",
 				},
-				{ value: "reset", label: "Reset", description: "Start a new session, then re-submit the prompt" },
+				{
+					value: "reset",
+					label: "Reset",
+					description: "Start a new session, then re-submit the prompt",
+				},
 			],
 		},
 	},
@@ -1832,9 +1945,21 @@ export const SETTINGS_SCHEMA = {
 			label: "Marketplace Auto-Update",
 			description: "Check for plugin updates on startup",
 			options: [
-				{ value: "off", label: "Off", description: "Don't check for plugin updates" },
-				{ value: "notify", label: "Notify", description: "Check on startup and notify when updates are available" },
-				{ value: "auto", label: "Auto", description: "Check on startup and auto-install updates" },
+				{
+					value: "off",
+					label: "Off",
+					description: "Don't check for plugin updates",
+				},
+				{
+					value: "notify",
+					label: "Notify",
+					description: "Check on startup and notify when updates are available",
+				},
+				{
+					value: "auto",
+					label: "Auto",
+					description: "Check on startup and auto-install updates",
+				},
 			],
 		},
 	},
@@ -2177,7 +2302,11 @@ export const SETTINGS_SCHEMA = {
 					label: "Context-full",
 					description: "Summarize in-place and keep the current session",
 				},
-				{ value: "handoff", label: "Handoff", description: "Generate handoff and continue in a new session" },
+				{
+					value: "handoff",
+					label: "Handoff",
+					description: "Generate handoff and continue in a new session",
+				},
 				{
 					value: "shake",
 					label: "Shake",
@@ -2206,11 +2335,23 @@ export const SETTINGS_SCHEMA = {
 			label: "Compaction Threshold",
 			description: "Percent threshold for context maintenance; set to Default to use legacy reserve-based behavior",
 			options: [
-				{ value: "default", label: "Default", description: "Legacy reserve-based threshold" },
-				{ value: "10", label: "10%", description: "Extremely early maintenance" },
+				{
+					value: "default",
+					label: "Default",
+					description: "Legacy reserve-based threshold",
+				},
+				{
+					value: "10",
+					label: "10%",
+					description: "Extremely early maintenance",
+				},
 				{ value: "20", label: "20%", description: "Very early maintenance" },
 				{ value: "30", label: "30%", description: "Early maintenance" },
-				{ value: "40", label: "40%", description: "Moderately early maintenance" },
+				{
+					value: "40",
+					label: "40%",
+					description: "Moderately early maintenance",
+				},
 				{ value: "50", label: "50%", description: "Halfway point" },
 				{ value: "60", label: "60%", description: "Moderate context usage" },
 				{ value: "70", label: "70%", description: "Balanced" },
@@ -2231,14 +2372,46 @@ export const SETTINGS_SCHEMA = {
 			label: "Compaction Token Limit",
 			description: "Fixed token limit for context maintenance; overrides percentage if set",
 			options: [
-				{ value: "default", label: "Default", description: "Use percentage-based threshold" },
-				{ value: "25000", label: "25K tokens", description: "Quarter of a 200K window" },
-				{ value: "50000", label: "50K tokens", description: "Half of a 200K window" },
-				{ value: "100000", label: "100K tokens", description: "Half of a 200K window" },
-				{ value: "150000", label: "150K tokens", description: "Three-quarters of a 200K window" },
-				{ value: "200000", label: "200K tokens", description: "Full standard context window" },
-				{ value: "300000", label: "300K tokens", description: "Large context window" },
-				{ value: "500000", label: "500K tokens", description: "Very large context window" },
+				{
+					value: "default",
+					label: "Default",
+					description: "Use percentage-based threshold",
+				},
+				{
+					value: "25000",
+					label: "25K tokens",
+					description: "Quarter of a 200K window",
+				},
+				{
+					value: "50000",
+					label: "50K tokens",
+					description: "Half of a 200K window",
+				},
+				{
+					value: "100000",
+					label: "100K tokens",
+					description: "Half of a 200K window",
+				},
+				{
+					value: "150000",
+					label: "150K tokens",
+					description: "Three-quarters of a 200K window",
+				},
+				{
+					value: "200000",
+					label: "200K tokens",
+					description: "Full standard context window",
+				},
+				{
+					value: "300000",
+					label: "300K tokens",
+					description: "Large context window",
+				},
+				{
+					value: "500000",
+					label: "500K tokens",
+					description: "Very large context window",
+				},
 			],
 		},
 	},
@@ -2378,7 +2551,11 @@ export const SETTINGS_SCHEMA = {
 			description:
 				"Experimental: render selected system prompt text as dense PNG image(s) and attach to the first user message (vision models only). Saves tokens; loses prompt caching for imaged text.",
 			options: [
-				{ value: "none", label: "None", description: "Keep the system prompt as text." },
+				{
+					value: "none",
+					label: "None",
+					description: "Keep the system prompt as text.",
+				},
 				{
 					value: "agents-md",
 					label: "AGENTS.md",
@@ -2435,18 +2612,66 @@ export const SETTINGS_SCHEMA = {
 					label: "Auto",
 					description: "Use native tool calls unless the model is known not to support them.",
 				},
-				{ value: "native", label: "Native", description: "Use provider-native tool calls." },
-				{ value: "glm", label: "GLM", description: "Use GLM-style in-band tool calls." },
-				{ value: "hermes", label: "Hermes", description: "Use Hermes-style in-band tool calls." },
-				{ value: "kimi", label: "Kimi", description: "Use Kimi-style in-band tool calls." },
-				{ value: "xml", label: "XML", description: "Use generic XML in-band tool calls." },
-				{ value: "anthropic", label: "Anthropic", description: "Use Anthropic-style in-band tool calls." },
-				{ value: "deepseek", label: "DeepSeek", description: "Use DeepSeek-style in-band tool calls." },
-				{ value: "harmony", label: "Harmony", description: "Use Harmony-style in-band tool calls." },
-				{ value: "qwen3", label: "Qwen3", description: "Use the Qwen3 owned dialect." },
-				{ value: "gemini", label: "Gemini", description: "Use the Gemini owned dialect." },
-				{ value: "gemma", label: "Gemma", description: "Use the Gemma owned dialect." },
-				{ value: "minimax", label: "MiniMax", description: "Use the MiniMax owned dialect." },
+				{
+					value: "native",
+					label: "Native",
+					description: "Use provider-native tool calls.",
+				},
+				{
+					value: "glm",
+					label: "GLM",
+					description: "Use GLM-style in-band tool calls.",
+				},
+				{
+					value: "hermes",
+					label: "Hermes",
+					description: "Use Hermes-style in-band tool calls.",
+				},
+				{
+					value: "kimi",
+					label: "Kimi",
+					description: "Use Kimi-style in-band tool calls.",
+				},
+				{
+					value: "xml",
+					label: "XML",
+					description: "Use generic XML in-band tool calls.",
+				},
+				{
+					value: "anthropic",
+					label: "Anthropic",
+					description: "Use Anthropic-style in-band tool calls.",
+				},
+				{
+					value: "deepseek",
+					label: "DeepSeek",
+					description: "Use DeepSeek-style in-band tool calls.",
+				},
+				{
+					value: "harmony",
+					label: "Harmony",
+					description: "Use Harmony-style in-band tool calls.",
+				},
+				{
+					value: "qwen3",
+					label: "Qwen3",
+					description: "Use the Qwen3 owned dialect.",
+				},
+				{
+					value: "gemini",
+					label: "Gemini",
+					description: "Use the Gemini owned dialect.",
+				},
+				{
+					value: "gemma",
+					label: "Gemma",
+					description: "Use the Gemma owned dialect.",
+				},
+				{
+					value: "minimax",
+					label: "MiniMax",
+					description: "Use the MiniMax owned dialect.",
+				},
 			],
 		},
 	},
@@ -2625,8 +2850,16 @@ export const SETTINGS_SCHEMA = {
 			description: "Off, local summary pipeline, Mnemopi SQLite, or Hindsight remote memory",
 			options: [
 				{ value: "off", label: "Off", description: "No memory subsystem runs" },
-				{ value: "local", label: "Local", description: "Local rollout summarisation pipeline (memory_summary.md)" },
-				{ value: "hindsight", label: "Hindsight", description: "Vectorize Hindsight remote memory service" },
+				{
+					value: "local",
+					label: "Local",
+					description: "Local rollout summarisation pipeline (memory_summary.md)",
+				},
+				{
+					value: "hindsight",
+					label: "Hindsight",
+					description: "Vectorize Hindsight remote memory service",
+				},
 				{
 					value: "mnemopi",
 					label: "Mnemopi",
@@ -2857,13 +3090,21 @@ export const SETTINGS_SCHEMA = {
 				"Use no LLM, the online tiny model (the TINY role from /models, else @smol), or a remote OpenAI-compatible endpoint",
 			condition: "mnemopiActive",
 			options: [
-				{ value: "none", label: "None", description: "Disable Mnemopi LLM-backed extraction" },
+				{
+					value: "none",
+					label: "None",
+					description: "Disable Mnemopi LLM-backed extraction",
+				},
 				{
 					value: "smol",
 					label: "Online (tiny)",
 					description: "Use the online tiny model (the TINY role from /models, else @smol)",
 				},
-				{ value: "remote", label: "Remote", description: "Use the Mnemopi remote LLM settings below" },
+				{
+					value: "remote",
+					label: "Remote",
+					description: "Use the Mnemopi remote LLM settings below",
+				},
 			],
 		},
 	},
@@ -3019,7 +3260,11 @@ export const SETTINGS_SCHEMA = {
 					label: "Full session",
 					description: "Upsert one document per session (recommended)",
 				},
-				{ value: "last-turn", label: "Last turn", description: "Chunked retention sliced by turn boundaries" },
+				{
+					value: "last-turn",
+					label: "Last turn",
+					description: "Chunked retention sliced by turn boundaries",
+				},
 			],
 			condition: "hindsightActive",
 		},
@@ -3036,7 +3281,10 @@ export const SETTINGS_SCHEMA = {
 	"hindsight.recallMaxTokens": { type: "number", default: 1024 },
 	"hindsight.recallContextTurns": { type: "number", default: 1 },
 	"hindsight.recallMaxQueryChars": { type: "number", default: 800 },
-	"hindsight.recallTypes": { type: "array", default: HINDSIGHT_RECALL_TYPES_DEFAULT },
+	"hindsight.recallTypes": {
+		type: "array",
+		default: HINDSIGHT_RECALL_TYPES_DEFAULT,
+	},
 
 	"hindsight.debug": { type: "boolean", default: false },
 
@@ -3069,7 +3317,10 @@ export const SETTINGS_SCHEMA = {
 			condition: "hindsightActive",
 		},
 	},
-	"hindsight.mentalModelRefreshIntervalMs": { type: "number", default: 5 * 60 * 1000 },
+	"hindsight.mentalModelRefreshIntervalMs": {
+		type: "number",
+		default: 5 * 60 * 1000,
+	},
 	"hindsight.mentalModelMaxRenderChars": { type: "number", default: 16_000 },
 
 	// TTSR
@@ -3106,10 +3357,26 @@ export const SETTINGS_SCHEMA = {
 			label: "TTSR Interrupt Mode",
 			description: "When to interrupt mid-stream vs inject warning after completion",
 			options: [
-				{ value: "always", label: "always", description: "Interrupt on prose and tool streams" },
-				{ value: "prose-only", label: "prose-only", description: "Interrupt only on reply/thinking matches" },
-				{ value: "tool-only", label: "tool-only", description: "Interrupt only on tool-call argument matches" },
-				{ value: "never", label: "never", description: "Never interrupt; inject warning after completion" },
+				{
+					value: "always",
+					label: "always",
+					description: "Interrupt on prose and tool streams",
+				},
+				{
+					value: "prose-only",
+					label: "prose-only",
+					description: "Interrupt only on reply/thinking matches",
+				},
+				{
+					value: "tool-only",
+					label: "tool-only",
+					description: "Interrupt only on tool-call argument matches",
+				},
+				{
+					value: "never",
+					label: "never",
+					description: "Never interrupt; inject warning after completion",
+				},
 			],
 		},
 	},
@@ -3498,7 +3765,10 @@ export const SETTINGS_SCHEMA = {
 			description: "Block shell commands that have dedicated tools",
 		},
 	},
-	"bashInterceptor.patterns": { type: "array", default: DEFAULT_BASH_INTERCEPTOR_RULES },
+	"bashInterceptor.patterns": {
+		type: "array",
+		default: DEFAULT_BASH_INTERCEPTOR_RULES,
+	},
 
 	"bash.direnv": {
 		type: "enum",
@@ -3754,13 +4024,21 @@ export const SETTINGS_SCHEMA = {
 			label: "Create Todos Automatically",
 			description: "How strongly to push automatic todo-list creation after the first message",
 			options: [
-				{ value: "default", label: "Default", description: "Model decides; no automatic todo list" },
+				{
+					value: "default",
+					label: "Default",
+					description: "Model decides; no automatic todo list",
+				},
 				{
 					value: "preferred",
 					label: "Preferred",
 					description: "Suggests a todo list on the first message (reminder, not forced)",
 				},
-				{ value: "always", label: "Always", description: "Forces a comprehensive todo list on the first message" },
+				{
+					value: "always",
+					label: "Always",
+					description: "Forces a comprehensive todo list on the first message",
+				},
 			],
 		},
 	},
@@ -4252,7 +4530,11 @@ export const SETTINGS_SCHEMA = {
 				{ value: "30s", label: "30 seconds" },
 				{ value: "1m", label: "1 minute" },
 				{ value: "5m", label: "5 minutes" },
-				{ value: "smart", label: "Smart", description: "Default — adaptive 5s→5m, resets when you stop polling" },
+				{
+					value: "smart",
+					label: "Smart",
+					description: "Default — adaptive 5s→5m, resets when you stop polling",
+				},
 			],
 		},
 	},
@@ -4304,13 +4586,21 @@ export const SETTINGS_SCHEMA = {
 			description:
 				"Choose which mounted-device docs and schemas are inlined in the system prompt. Built-ins keeps core tools inline while MCP and extension tools stay on-demand.",
 			options: [
-				{ value: "inline", label: "All Devices", description: "Inline docs and schemas for every mounted device." },
+				{
+					value: "inline",
+					label: "All Devices",
+					description: "Inline docs and schemas for every mounted device.",
+				},
 				{
 					value: "builtins",
 					label: "Built-ins Only",
 					description: "Inline built-in docs; fetch MCP and extension docs on demand.",
 				},
-				{ value: "catalog", label: "Catalog Only", description: "List every device; fetch all docs on demand." },
+				{
+					value: "catalog",
+					label: "Catalog Only",
+					description: "List every device; fetch all docs on demand.",
+				},
 			],
 		},
 	},
@@ -4469,17 +4759,37 @@ export const SETTINGS_SCHEMA = {
 				'Isolation backend for subagents. "auto" lets the native PAL pick the best available backend (CoW-aware filesystems, then overlayfs/ProjFS, then a git worktree / recursive-copy fallback).',
 			options: [
 				{ value: "none", label: "None", description: "No isolation" },
-				{ value: "auto", label: "Auto", description: "Let the PAL pick the best available backend" },
-				{ value: "apfs", label: "APFS", description: "macOS clonefile reflink (APFS)" },
-				{ value: "btrfs", label: "btrfs", description: "btrfs subvolume snapshot" },
+				{
+					value: "auto",
+					label: "Auto",
+					description: "Let the PAL pick the best available backend",
+				},
+				{
+					value: "apfs",
+					label: "APFS",
+					description: "macOS clonefile reflink (APFS)",
+				},
+				{
+					value: "btrfs",
+					label: "btrfs",
+					description: "btrfs subvolume snapshot",
+				},
 				{ value: "zfs", label: "ZFS", description: "ZFS snapshot + clone" },
-				{ value: "reflink", label: "Reflink", description: "Linux FICLONE per-file reflink" },
+				{
+					value: "reflink",
+					label: "Reflink",
+					description: "Linux FICLONE per-file reflink",
+				},
 				{
 					value: "overlayfs",
 					label: "Overlayfs",
 					description: "Linux kernel overlay (or fuse-overlayfs fallback)",
 				},
-				{ value: "projfs", label: "ProjFS", description: "Windows Projected File System" },
+				{
+					value: "projfs",
+					label: "ProjFS",
+					description: "Windows Projected File System",
+				},
 				{
 					value: "block-clone",
 					label: "Block clone",
@@ -4516,8 +4826,16 @@ export const SETTINGS_SCHEMA = {
 			label: "Isolation Merge Strategy",
 			description: "How isolated task changes are integrated (patch apply or branch merge)",
 			options: [
-				{ value: "patch", label: "Patch", description: "Combine diffs and git apply" },
-				{ value: "branch", label: "Branch", description: "Commit per task, merge with --no-ff" },
+				{
+					value: "patch",
+					label: "Patch",
+					description: "Combine diffs and git apply",
+				},
+				{
+					value: "branch",
+					label: "Branch",
+					description: "Commit per task, merge with --no-ff",
+				},
 			],
 		},
 	},
@@ -4532,8 +4850,16 @@ export const SETTINGS_SCHEMA = {
 			label: "Isolation Commit Style",
 			description: "Commit message style for nested repo changes (generic or AI-generated)",
 			options: [
-				{ value: "generic", label: "Generic", description: "Static commit message" },
-				{ value: "ai", label: "AI", description: "AI-generated commit message from diff" },
+				{
+					value: "generic",
+					label: "Generic",
+					description: "Static commit message",
+				},
+				{
+					value: "ai",
+					label: "AI",
+					description: "AI-generated commit message from diff",
+				},
 			],
 		},
 	},
@@ -4550,6 +4876,65 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"task.fanoutArchive.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tasks",
+			group: "Subagents",
+			label: "Fanout Archive",
+			description:
+				"Enables persistent-fanout preflight and terminal archival. Disabling archival still preserves the physical free-space preflight.",
+		},
+	},
+
+	"task.fanoutArchive.archiveLimitBytes": {
+		type: "number",
+		default: 1_073_741_824,
+		ui: {
+			tab: "tasks",
+			group: "Subagents",
+			label: "Fanout Archive Limit",
+			description:
+				"Logical retention budget for published archive entries in one parent artifact directory. 0 disables archival moves, not physical preflight.",
+		},
+	},
+
+	"task.fanoutArchive.minimumFreeBytes": {
+		type: "number",
+		default: 1_073_741_824,
+		ui: {
+			tab: "tasks",
+			group: "Subagents",
+			label: "Fanout Minimum Free Space",
+			description: "Physical filesystem headroom required after the fanout reservation.",
+		},
+	},
+
+	"task.fanoutArchive.reserveBytesPerChild": {
+		type: "number",
+		default: 67_108_864,
+		ui: {
+			tab: "tasks",
+			group: "Subagents",
+			label: "Fanout Reservation Per Child",
+			description:
+				"Physical filesystem reservation for each requested persistent child, including expected transcript and spill growth.",
+		},
+	},
+
+	"task.fanoutArchive.strictActiveTerminalLimitBytes": {
+		type: "number",
+		default: 0,
+		ui: {
+			tab: "tasks",
+			group: "Subagents",
+			label: "Fanout Active Terminal Limit",
+			description:
+				"Logical retention cap for eligible terminal bytes left at active paths. 0 disables this retention gate.",
+		},
+	},
+
 	"task.eager": {
 		type: "enum",
 		values: ["default", "preferred", "always"] as const,
@@ -4560,9 +4945,21 @@ export const SETTINGS_SCHEMA = {
 			label: "Prefer Task Delegation",
 			description: "How strongly to push delegating work to subagents",
 			options: [
-				{ value: "default", label: "Default", description: "Model decides when to delegate" },
-				{ value: "preferred", label: "Preferred", description: "Adds delegation guidance to the system prompt" },
-				{ value: "always", label: "Always", description: "Prompt guidance plus a first-turn delegation reminder" },
+				{
+					value: "default",
+					label: "Default",
+					description: "Model decides when to delegate",
+				},
+				{
+					value: "preferred",
+					label: "Preferred",
+					description: "Adds delegation guidance to the system prompt",
+				},
+				{
+					value: "always",
+					label: "Always",
+					description: "Prompt guidance plus a first-turn delegation reminder",
+				},
 			],
 		},
 	},
@@ -4983,7 +5380,11 @@ export const SETTINGS_SCHEMA = {
 			description:
 				'Serving path for Fireworks requests. Priority sends `service_tier: "priority"` for higher reliability during peak traffic at a higher price; Standard omits it. Fast (`-fast`) models ignore this — Fast is its own serving path.',
 			options: [
-				{ value: "standard", label: "Standard", description: "Default serving path (no service_tier)" },
+				{
+					value: "standard",
+					label: "Standard",
+					description: "Default serving path (no service_tier)",
+				},
 				{
 					value: "priority",
 					label: "Priority",
@@ -5019,7 +5420,11 @@ export const SETTINGS_SCHEMA = {
 					label: "Auto",
 					description: "Prefer local on-device TTS; route .mp3 output to xAI when credentials exist",
 				},
-				{ value: "local", label: "Local", description: "On-device neural TTS (Kokoro-82M); output is WAV/PCM16" },
+				{
+					value: "local",
+					label: "Local",
+					description: "On-device neural TTS (Kokoro-82M); output is WAV/PCM16",
+				},
 				{
 					value: "xai",
 					label: "xAI Grok Voice",
@@ -5182,8 +5587,16 @@ export const SETTINGS_SCHEMA = {
 				"Highest effort the `auto` classifier may resolve. `xhigh` keeps the classifier one tier below the top, so only an explicit `ultrathink` reaches `max`; `max` lets a turn the classifier judges exceptional bill the top tier on models that expose it.",
 			condition: "autoThinkingActive",
 			options: [
-				{ value: "xhigh", label: "xhigh", description: "Classifier stops at xhigh (default)" },
-				{ value: "max", label: "max", description: "Classifier may resolve max where the model supports it" },
+				{
+					value: "xhigh",
+					label: "xhigh",
+					description: "Classifier stops at xhigh (default)",
+				},
+				{
+					value: "max",
+					label: "max",
+					description: "Classifier may resolve max where the model supports it",
+				},
 			],
 		},
 	},
@@ -5223,9 +5636,17 @@ export const SETTINGS_SCHEMA = {
 			label: "Kimi API Format",
 			description: "API format for Kimi Code provider (auto follows live model metadata)",
 			options: [
-				{ value: "auto", label: "Auto", description: "Use the model's server-declared protocol" },
+				{
+					value: "auto",
+					label: "Auto",
+					description: "Use the model's server-declared protocol",
+				},
 				{ value: "openai", label: "OpenAI", description: "api.kimi.com" },
-				{ value: "anthropic", label: "Anthropic", description: "api.moonshot.ai" },
+				{
+					value: "anthropic",
+					label: "Anthropic",
+					description: "api.moonshot.ai",
+				},
 			],
 		},
 	},
@@ -5240,9 +5661,21 @@ export const SETTINGS_SCHEMA = {
 			label: "OpenAI WebSockets",
 			description: "Websocket policy for OpenAI Codex models (auto uses model defaults, on forces, off disables)",
 			options: [
-				{ value: "auto", label: "Auto", description: "Use model/provider default websocket behavior" },
-				{ value: "off", label: "Off", description: "Disable websockets for OpenAI Codex models" },
-				{ value: "on", label: "On", description: "Force websockets for OpenAI Codex models" },
+				{
+					value: "auto",
+					label: "Auto",
+					description: "Use model/provider default websocket behavior",
+				},
+				{
+					value: "off",
+					label: "Off",
+					description: "Disable websockets for OpenAI Codex models",
+				},
+				{
+					value: "on",
+					label: "On",
+					description: "Force websockets for OpenAI Codex models",
+				},
 			],
 		},
 	},
@@ -5257,8 +5690,16 @@ export const SETTINGS_SCHEMA = {
 			description:
 				"Seconds to wait for the first model stream event; -1 uses provider/env defaults, 0 disables the watchdog",
 			options: [
-				{ value: "-1", label: "Auto", description: "Use provider defaults and PI_* timeout env vars" },
-				{ value: "0", label: "Off", description: "Disable first-event timeout" },
+				{
+					value: "-1",
+					label: "Auto",
+					description: "Use provider defaults and PI_* timeout env vars",
+				},
+				{
+					value: "0",
+					label: "Off",
+					description: "Disable first-event timeout",
+				},
 				{ value: "300", label: "5 minutes" },
 				{ value: "600", label: "10 minutes" },
 				{ value: "1800", label: "30 minutes" },
@@ -5276,7 +5717,11 @@ export const SETTINGS_SCHEMA = {
 			description:
 				"Seconds a model stream may stay silent between events; -1 uses provider/env defaults, 0 disables the watchdog",
 			options: [
-				{ value: "-1", label: "Auto", description: "Use provider defaults and PI_* timeout env vars" },
+				{
+					value: "-1",
+					label: "Auto",
+					description: "Use provider defaults and PI_* timeout env vars",
+				},
 				{ value: "0", label: "Off", description: "Disable idle timeout" },
 				{ value: "300", label: "5 minutes" },
 				{ value: "600", label: "10 minutes" },
@@ -5296,10 +5741,26 @@ export const SETTINGS_SCHEMA = {
 			description:
 				"Default routing-variant suffix appended to OpenRouter model IDs (overridden when the selector already names a variant)",
 			options: [
-				{ value: "default", label: "Default", description: "No suffix; use OpenRouter's default routing" },
-				{ value: "nitro", label: ":nitro", description: "Prioritize throughput / lowest latency" },
-				{ value: "floor", label: ":floor", description: "Prioritize cheapest available provider" },
-				{ value: "online", label: ":online", description: "Enable OpenRouter's web-search plugin" },
+				{
+					value: "default",
+					label: "Default",
+					description: "No suffix; use OpenRouter's default routing",
+				},
+				{
+					value: "nitro",
+					label: ":nitro",
+					description: "Prioritize throughput / lowest latency",
+				},
+				{
+					value: "floor",
+					label: ":floor",
+					description: "Prioritize cheapest available provider",
+				},
+				{
+					value: "online",
+					label: ":online",
+					description: "Enable OpenRouter's web-search plugin",
+				},
 				{
 					value: "exacto",
 					label: ":exacto",
@@ -5323,11 +5784,31 @@ export const SETTINGS_SCHEMA = {
 					label: "Auto",
 					description: "Priority: native > trafilatura > lynx > parallel > jina",
 				},
-				{ value: "native", label: "Native", description: "In-process HTML→Markdown converter (always available)" },
-				{ value: "trafilatura", label: "Trafilatura", description: "Auto-installs via uv/pip" },
-				{ value: "lynx", label: "Lynx", description: "Requires lynx system package" },
-				{ value: "parallel", label: "Parallel", description: "Requires PARALLEL_API_KEY" },
-				{ value: "jina", label: "Jina", description: "Uses r.jina.ai reader (JINA_API_KEY optional)" },
+				{
+					value: "native",
+					label: "Native",
+					description: "In-process HTML→Markdown converter (always available)",
+				},
+				{
+					value: "trafilatura",
+					label: "Trafilatura",
+					description: "Auto-installs via uv/pip",
+				},
+				{
+					value: "lynx",
+					label: "Lynx",
+					description: "Requires lynx system package",
+				},
+				{
+					value: "parallel",
+					label: "Parallel",
+					description: "Requires PARALLEL_API_KEY",
+				},
+				{
+					value: "jina",
+					label: "Jina",
+					description: "Uses r.jina.ai reader (JINA_API_KEY optional)",
+				},
 			],
 		},
 	},
@@ -5348,8 +5829,16 @@ export const SETTINGS_SCHEMA = {
 					label: "Unset",
 					description: "Check eligibility, then ask before spending the first saved reset.",
 				},
-				{ value: "yes", label: "Yes", description: "Spend eligible saved resets without prompting." },
-				{ value: "no", label: "No", description: "Do not run the saved-reset auto-redeem check." },
+				{
+					value: "yes",
+					label: "Yes",
+					description: "Spend eligible saved resets without prompting.",
+				},
+				{
+					value: "no",
+					label: "No",
+					description: "Do not run the saved-reset auto-redeem check.",
+				},
 			],
 		},
 	},
@@ -5397,9 +5886,21 @@ export const SETTINGS_SCHEMA = {
 			description:
 				"Cache system prompt + tool specs and keep an append-only message log so provider prefix caches (DeepSeek, Xiaomi/SGLang, Anthropic) hit at maximum rate. Auto enables for known prefix-cache providers.",
 			options: [
-				{ value: "auto", label: "Auto", description: "Enable for known prefix-cache providers (recommended)" },
-				{ value: "on", label: "On", description: "Always enable append-only context" },
-				{ value: "off", label: "Off", description: "Disable append-only context" },
+				{
+					value: "auto",
+					label: "Auto",
+					description: "Enable for known prefix-cache providers (recommended)",
+				},
+				{
+					value: "on",
+					label: "On",
+					description: "Always enable append-only context",
+				},
+				{
+					value: "off",
+					label: "Off",
+					description: "Disable append-only context",
+				},
 			],
 		},
 	},
@@ -5566,7 +6067,10 @@ type Schema = typeof SETTINGS_SCHEMA;
 export type SettingPath = keyof Schema;
 
 /** Infer the value type for a setting path */
-export type SettingValue<P extends SettingPath> = Schema[P] extends { type: "boolean"; default: undefined }
+export type SettingValue<P extends SettingPath> = Schema[P] extends {
+	type: "boolean";
+	default: undefined;
+}
 	? boolean | undefined
 	: Schema[P] extends { type: "boolean" }
 		? boolean

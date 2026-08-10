@@ -227,7 +227,12 @@ type McpNotificationEntry = {
 };
 
 type LateDiagnosticsDetails = {
-	files: Array<{ path: string; summary: string; errored: boolean; messages: string[] }>;
+	files: Array<{
+		path: string;
+		summary: string;
+		errored: boolean;
+		messages: string[];
+	}>;
 };
 
 function buildLateDiagnosticsBatchMessage(
@@ -622,18 +627,38 @@ export function resolveDialect(
 
 export type { PromptTemplate } from "./config/prompt-templates";
 export { Settings, type SkillsSettings } from "./config/settings";
-export type { CustomCommand, CustomCommandFactory } from "./extensibility/custom-commands/types";
-export type { CustomTool, CustomToolFactory } from "./extensibility/custom-tools/types";
+export type {
+	CustomCommand,
+	CustomCommandFactory,
+} from "./extensibility/custom-commands/types";
+export type {
+	CustomTool,
+	CustomToolFactory,
+} from "./extensibility/custom-tools/types";
 export type * from "./extensibility/extensions";
 export type { Skill } from "./extensibility/skills";
 export type { FileSlashCommand } from "./extensibility/slash-commands";
-export type { MCPManager, MCPServerConfig, MCPServerConnection, MCPToolsLoadResult } from "./mcp";
+export type {
+	MCPManager,
+	MCPServerConfig,
+	MCPServerConnection,
+	MCPToolsLoadResult,
+} from "./mcp";
 // Agent registry: pass a private instance per `createAgentSession` when
 // embedding several concurrent top-level sessions in one process (the default
 // global registry admits only one "Main" per process generation).
-export { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
+export {
+	type AgentRef,
+	AgentRegistry,
+	MAIN_AGENT_ID,
+} from "./registry/agent-registry";
 export type { Tool } from "./tools";
-export { buildDirectoryTree, buildWorkspaceTree, type DirectoryTree, type WorkspaceTree } from "./workspace-tree";
+export {
+	buildDirectoryTree,
+	buildWorkspaceTree,
+	type DirectoryTree,
+	type WorkspaceTree,
+} from "./workspace-tree";
 
 export {
 	// Individual tool classes (for custom usage)
@@ -952,7 +977,11 @@ export function customToolToDefinition(tool: CustomTool): ToolDefinition {
 			? (result, options, theme): Component => {
 					const component = tool.renderResult?.(
 						result,
-						{ expanded: options.expanded, isPartial: options.isPartial, spinnerFrame: options.spinnerFrame },
+						{
+							expanded: options.expanded,
+							isPartial: options.isPartial,
+							spinnerFrame: options.spinnerFrame,
+						},
 						theme,
 					);
 					// Return empty component if undefined to match Component type requirement
@@ -977,7 +1006,10 @@ function createCustomToolsExtension(tools: CustomTool[]): ExtensionFactory {
 				try {
 					await tool.onSession(event, createCustomToolContext(ctx));
 				} catch (err) {
-					logger.warn("Custom tool onSession error", { tool: tool.name, error: String(err) });
+					logger.warn("Custom tool onSession error", {
+						tool: tool.name,
+						error: String(err),
+					});
 				}
 			}
 		};
@@ -998,7 +1030,14 @@ function createCustomToolsExtension(tools: CustomTool[]): ExtensionFactory {
 			runOnSession({ reason: "shutdown", previousSessionFile: undefined }, ctx),
 		);
 		api.on("auto_compaction_start", async (event, ctx) =>
-			runOnSession({ reason: "auto_compaction_start", trigger: event.reason, action: event.action }, ctx),
+			runOnSession(
+				{
+					reason: "auto_compaction_start",
+					trigger: event.reason,
+					action: event.action,
+				},
+				ctx,
+			),
 		);
 		api.on("auto_compaction_end", async (event, ctx) =>
 			runOnSession(
@@ -1129,7 +1168,11 @@ export function createAutoLearnCaptureRunner(
 		const captureProviderSessionState = new Map<string, ProviderSessionState>();
 		const captureMessages = options.sourceAgent.state.messages.map((message): AgentMessage => {
 			if (message.role === "assistant") {
-				return { ...message, responseId: undefined, providerPayload: undefined };
+				return {
+					...message,
+					responseId: undefined,
+					providerPayload: undefined,
+				};
 			}
 			if (message.role === "user" || message.role === "developer") {
 				return { ...message, providerPayload: undefined };
@@ -1279,7 +1322,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		? Promise.resolve(options.workspaceTree)
 		: includeWorkspaceTree
 			? logger.time("buildWorkspaceTree", () => buildWorkspaceTree(cwd, { timeoutMs: STARTUP_SCAN_DEADLINE_MS }))
-			: Promise.resolve({ rootPath: cwd, rendered: "", truncated: false, totalLines: 0, agentsMdFiles: [] });
+			: Promise.resolve({
+					rootPath: cwd,
+					rendered: "",
+					truncated: false,
+					totalLines: 0,
+					agentsMdFiles: [],
+				});
 	workspaceTreePromise.catch(() => {});
 
 	// Independent discoveries that depend only on cwd/agentDir — kicked off in parallel and awaited
@@ -1293,7 +1342,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		try {
 			return await resolveActiveRepoContext(repoCwd);
 		} catch (err) {
-			logger.debug("Failed to resolve active repo context", { err: String(err) });
+			logger.debug("Failed to resolve active repo context", {
+				err: String(err),
+			});
 			return null;
 		}
 	};
@@ -1544,7 +1595,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (existingSession.injectedTtsrRules.length > 0) {
 				ttsrManager.restoreInjected(existingSession.injectedTtsrRules);
 			}
-			return { ttsrManager, rulebookRules, alwaysApplyRules, allRules: rulesResult.items };
+			return {
+				ttsrManager,
+				rulebookRules,
+				alwaysApplyRules,
+				allRules: rulesResult.items,
+			};
 		},
 	);
 
@@ -1771,6 +1827,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				}
 			},
 			getArtifactManager: () => sessionManager.getArtifactManager(),
+			getFanoutArchiveManager: () => sessionManager.getFanoutArchiveManager(),
 			settings,
 			authStorage,
 			modelRegistry,
@@ -2759,7 +2816,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			emitEvent: event => cursorEventEmitter?.(event),
 			getTodoPhases: () => session.getTodoPhases(),
 			setTodoPhases: phases => session.setTodoPhases(phases),
-			persistTodoPhases: phases => sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases }),
+			persistTodoPhases: phases =>
+				sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, {
+					phases,
+				}),
 			// `pi_grep` carries its own context width and match cap, which the
 			// shared grep instance fixed at construction cannot express. Gated on
 			// the grant: the factory builds a fresh tool and `executeTool` prefers
@@ -3581,7 +3641,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						if (!startupQuiet) eventBus.emit(LSP_STARTUP_EVENT_CHANNEL, event);
 					} catch (error) {
 						const errorMessage = error instanceof Error ? error.message : String(error);
-						logger.warn("LSP server warmup failed", { cwd, error: errorMessage });
+						logger.warn("LSP server warmup failed", {
+							cwd,
+							error: errorMessage,
+						});
 						for (const server of lspServers ?? []) {
 							server.status = "error";
 							server.error = errorMessage;
@@ -3708,7 +3771,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			mcpManager.setOnPromptsChanged(serverName => {
 				const promptCommands = buildMCPPromptCommands(mcpManager);
 				session.setMCPPromptCommands(promptCommands);
-				logger.debug("MCP prompt commands refreshed", { path: `mcp:${serverName}` });
+				logger.debug("MCP prompt commands refreshed", {
+					path: `mcp:${serverName}`,
+				});
 			});
 			const notificationDebounceTimers = new Map<string, Timer>();
 			const clearDebounceTimers = () => {
@@ -3717,7 +3782,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			};
 			postmortem.register("mcp-notification-cleanup", clearDebounceTimers);
 			mcpManager.setOnResourcesChanged((serverName, uri) => {
-				logger.debug("MCP resources changed", { path: `mcp:${serverName}`, uri });
+				logger.debug("MCP resources changed", {
+					path: `mcp:${serverName}`,
+					uri,
+				});
 				if (!settings.get("mcp.notifications")) return;
 				const debounceMs = settings.get("mcp.notificationDebounceMs");
 				const key = `${serverName}:${uri}`;

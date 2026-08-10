@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -20,9 +21,6 @@ import { FileSessionStorage } from "../session/session-storage";
 
 const BLOB_FILE_RE = /^([a-f0-9]{64})(?:\.[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$/;
 const BLOB_REF_RE = /\bblob:sha256:([a-f0-9]{64})\b/gi;
-const JSONL_GLOB = new Bun.Glob("**/*.jsonl");
-const JSONL_GZ_GLOB = new Bun.Glob("**/*.jsonl.gz");
-const JSONL_BACKUP_GLOB = new Bun.Glob("**/*.jsonl.*.bak");
 const ACTIVE_STATUSES: ReadonlySet<SessionStatus> = new Set(["pending", "interrupted", "unknown"]);
 const DAY_MS = 86_400_000;
 const GC_WRITE_GRACE_MS = 5 * 60_000;
@@ -233,37 +231,39 @@ async function readTextIfPresent(file: string): Promise<string> {
 	}
 }
 
+async function collectSessionFiles(root: string, matches: (name: string) => boolean): Promise<string[]> {
+	const files: string[] = [];
+	const walk = async (dir: string): Promise<void> => {
+		let entries: Dirent[];
+		try {
+			entries = await fs.readdir(dir, { withFileTypes: true });
+		} catch (error) {
+			if (codeOf(error) === "ENOENT") return;
+			throw error;
+		}
+		for (const entry of entries) {
+			const file = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				if (entry.name !== ".fanout-archive") await walk(file);
+				continue;
+			}
+			if (entry.isFile() && matches(entry.name)) files.push(file);
+		}
+	};
+	await walk(root);
+	return files.sort();
+}
+
 async function collectJsonlFiles(root: string): Promise<string[]> {
-	try {
-		const files = await Array.fromAsync(JSONL_GLOB.scan(root), name => path.join(root, name));
-		files.sort();
-		return files;
-	} catch (error) {
-		if (codeOf(error) === "ENOENT") return [];
-		throw error;
-	}
+	return collectSessionFiles(root, name => name.endsWith(".jsonl"));
 }
 
 async function collectCompressedJsonlFiles(root: string): Promise<string[]> {
-	try {
-		const files = await Array.fromAsync(JSONL_GZ_GLOB.scan(root), name => path.join(root, name));
-		files.sort();
-		return files;
-	} catch (error) {
-		if (codeOf(error) === "ENOENT") return [];
-		throw error;
-	}
+	return collectSessionFiles(root, name => name.endsWith(".jsonl.gz"));
 }
 
 async function collectBackupJsonlFiles(root: string): Promise<string[]> {
-	try {
-		const files = await Array.fromAsync(JSONL_BACKUP_GLOB.scan(root), name => path.join(root, name));
-		files.sort();
-		return files;
-	} catch (error) {
-		if (codeOf(error) === "ENOENT") return [];
-		throw error;
-	}
+	return collectSessionFiles(root, name => /\.jsonl\.[^.]+\.bak$/.test(name));
 }
 
 async function collectReferencedBlobHashes(sessionRoots: string[]): Promise<Set<string>> {
@@ -303,7 +303,12 @@ async function collectBlobCandidates(blobDir: string): Promise<BlobCandidate[]> 
 		const stat = await statIfPresent(file);
 		if (!stat) continue;
 		if (!stat.isFile()) continue;
-		const candidate = byHash.get(hash) ?? { hash, paths: [], bytes: 0, mtimeMs: stat.mtimeMs };
+		const candidate = byHash.get(hash) ?? {
+			hash,
+			paths: [],
+			bytes: 0,
+			mtimeMs: stat.mtimeMs,
+		};
 		candidate.paths.push(file);
 		candidate.bytes += stat.size;
 		candidate.mtimeMs = Math.max(candidate.mtimeMs, stat.mtimeMs);
@@ -519,10 +524,18 @@ async function moveSessionWithArtifacts(candidate: ArchiveCandidate): Promise<vo
 		throw new Error(`archive artifacts destination exists: ${destArtifacts}`);
 	}
 
-	const moved: Array<{ source: string; destination: string; compressed?: boolean }> = [];
+	const moved: Array<{
+		source: string;
+		destination: string;
+		compressed?: boolean;
+	}> = [];
 	try {
 		await gzipSessionFile(sourceSession, destSession);
-		moved.push({ source: sourceSession, destination: destSession, compressed: true });
+		moved.push({
+			source: sourceSession,
+			destination: destSession,
+			compressed: true,
+		});
 		if (await pathExists(sourceArtifacts)) {
 			await movePath(sourceArtifacts, destArtifacts);
 			moved.push({ source: sourceArtifacts, destination: destArtifacts });
@@ -557,7 +570,9 @@ function tableExists(db: Database, table: string): boolean {
 }
 
 function historyHasSessionId(db: Database): boolean {
-	const rows = db.prepare("PRAGMA table_info(history)").all() as Array<{ name?: string | null }>;
+	const rows = db.prepare("PRAGMA table_info(history)").all() as Array<{
+		name?: string | null;
+	}>;
 	return rows.some(row => row.name === "session_id");
 }
 
@@ -687,7 +702,9 @@ function statsIdentityKeys(identities: Record<StatsEntryTable, StatsEntryIdentit
 }
 
 function tableHasColumn(db: Database, table: string, column: string): boolean {
-	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: string | null }>;
+	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+		name?: string | null;
+	}>;
 	return rows.some(row => row.name === column);
 }
 
@@ -953,7 +970,11 @@ function addSessionStatsIdentity(line: string, identities: Record<StatsEntryTabl
 				"id" in block &&
 				typeof block.id === "string"
 			) {
-				identities.tool_calls.push({ entryId: record.id, timestamp, toolCallId: block.id });
+				identities.tool_calls.push({
+					entryId: record.id,
+					timestamp,
+					toolCallId: block.id,
+				});
 			}
 		}
 	} catch {
@@ -1005,7 +1026,10 @@ async function populateStatsTransferTargets(context: StatsCleanupContext): Promi
 				[...plan.archivedIdentityKeys].some(key => incompleteIdentityKeys.has(key));
 		}
 		for (const retained of plan.retainedSessions) {
-			plan.transfers.push({ path: retained.path, identities: await identitiesFor(retained) });
+			plan.transfers.push({
+				path: retained.path,
+				identities: await identitiesFor(retained),
+			});
 		}
 	}
 }
@@ -1553,7 +1577,11 @@ export async function runGcCommand(args: GcCommandArgs): Promise<GcResult> {
 	const options = await resolveOptions(args.flags);
 	const archiveRoot = getArchivedSessionsDir(options.agentDir);
 	const result = await withGcLock(options.agentDir, async lockPath => {
-		const next: GcResult = { agentDir: options.agentDir, apply: options.apply, lockPath };
+		const next: GcResult = {
+			agentDir: options.agentDir,
+			apply: options.apply,
+			lockPath,
+		};
 		if (options.runBlobs) next.blobs = await runBlobGc(options, archiveRoot);
 		if (options.runArchive) next.archive = await runArchiveGc(options, archiveRoot);
 		if (options.runWal) next.wal = await runWalGc(options);

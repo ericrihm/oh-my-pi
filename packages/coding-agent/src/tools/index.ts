@@ -25,6 +25,7 @@ import type { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import type { AgentRegistry } from "../registry/agent-registry";
 import type { ArtifactManager } from "../session/artifacts";
 import type { ClientBridge } from "../session/client-bridge";
+import type { FanoutArchiveManager } from "../session/fanout-archive";
 import type { CustomMessage } from "../session/messages";
 import type { UsageStatistics } from "../session/session-entries";
 import type { SessionManager } from "../session/session-manager";
@@ -265,6 +266,8 @@ export interface ToolSession {
 	getArtifactsDir?: () => string | null;
 	/** Get the ArtifactManager backing this session (shared across parent + subagents). */
 	getArtifactManager?: () => ArtifactManager | null;
+	/** Get the manager for archival state owned by this session's parent artifacts directory. */
+	getFanoutArchiveManager?: () => FanoutArchiveManager | null;
 	/** Allocate a new artifact path and ID for session-scoped truncated output. */
 	allocateOutputArtifact?: (toolType: string) => Promise<{ id?: string; path?: string }>;
 	/** Get session spawns */
@@ -490,7 +493,9 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			);
 			pythonAvailable = availability.ok;
 			if (!availability.ok) {
-				logger.warn("Python kernel unavailable and JS backend disabled", { reason: availability.reason });
+				logger.warn("Python kernel unavailable and JS backend disabled", {
+					reason: availability.reason,
+				});
 			}
 		}
 		if (allowRuby) {
@@ -500,7 +505,9 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			);
 			rubyAvailable = availability.ok;
 			if (!availability.ok) {
-				logger.warn("Ruby kernel unavailable and JS backend disabled", { reason: availability.reason });
+				logger.warn("Ruby kernel unavailable and JS backend disabled", {
+					reason: availability.reason,
+				});
 			}
 		}
 		if (allowJulia) {
@@ -510,7 +517,9 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			);
 			juliaAvailable = availability.ok;
 			if (!availability.ok) {
-				logger.warn("Julia kernel unavailable and JS backend disabled", { reason: availability.reason });
+				logger.warn("Julia kernel unavailable and JS backend disabled", {
+					reason: availability.reason,
+				});
 			}
 		}
 	}
@@ -578,7 +587,10 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			}
 		}
 	}
-	const allTools: Record<string, ToolFactory> = { ...BUILTIN_TOOLS, ...HIDDEN_TOOLS };
+	const allTools: Record<string, ToolFactory> = {
+		...BUILTIN_TOOLS,
+		...HIDDEN_TOOLS,
+	};
 	const isToolAllowed = (name: string) => {
 		// Never in the default set. Explicitly activatable while goal.enabled and
 		// no goal record exists yet — /guided-goal enables it so the agent can

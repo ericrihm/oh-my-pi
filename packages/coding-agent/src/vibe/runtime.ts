@@ -23,8 +23,9 @@ import type { LocalProtocolOptions } from "../internal-urls";
 import { registerArtifactsDir } from "../internal-urls/registry-helpers";
 import { MCPManager } from "../mcp/manager";
 import vibeTurnResultTemplate from "../prompts/tools/vibe-turn-result.md" with { type: "text" };
-import { AgentLifecycleManager } from "../registry/agent-lifecycle";
+import { AgentLifecycleManager, persistAgentTombstone } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { type FanoutArchiveReservation, fanoutArchiveSettings } from "../session/fanout-archive";
 import { SessionManager, SessionPersistenceIndeterminateError } from "../session/session-manager";
 import { getBundledAgent } from "../task/agents";
 import { type ExecutorOptions, runSubagentFollowUpTurn, runSubprocess } from "../task/executor";
@@ -93,6 +94,7 @@ export interface VibeParentSession {
 	settings: ToolSession["settings"];
 	getActiveModelString?: () => string | undefined;
 	getModelString?: () => string | undefined;
+	getFanoutArchiveManager?: ToolSession["getFanoutArchiveManager"];
 }
 
 type VibeTombstoneReason = "explicit-kill" | "mode-exit" | "spawn-failed" | "unrecoverable";
@@ -191,6 +193,9 @@ interface VibeRecord {
 	suspended: boolean;
 	/** True only after a terminal lifecycle event has durably flushed. */
 	terminalPersisted: boolean;
+	reservation?: FanoutArchiveReservation;
+	reservationClaimed?: boolean;
+	startupClaim?: Promise<void>;
 }
 
 /**
@@ -245,7 +250,12 @@ export interface VibeKillOutcome {
 export interface VibeWaitOutcome {
 	/** Watched sessions whose snapshotted turn settled during (or before) the wait.
 	 * May overlap `stillRunning` when a queued follow-up turn already started. */
-	settled: Array<{ id: string; jobId: string; status: "completed" | "failed" | "cancelled"; resultText: string }>;
+	settled: Array<{
+		id: string;
+		jobId: string;
+		status: "completed" | "failed" | "cancelled";
+		resultText: string;
+	}>;
 	/** Watched sessions with a turn in flight when the wait returned. */
 	stillRunning: string[];
 	timedOut: boolean;
@@ -717,12 +727,14 @@ export class VibeSessionRegistry {
 		}
 		return ids;
 	}
-
 	async #resolvePersistedChild(
+		session: VibeParentSession,
 		parentSessionFile: string,
 		spawn: VibeSpawnLifecycleEvent,
 		options?: { requireAgentMatch?: boolean },
 	): Promise<string | undefined> {
+		const archive = session.getFanoutArchiveManager?.();
+		if (archive && (await archive.resolveArchivedTranscript(spawn.id))) return undefined;
 		if (options?.requireAgentMatch !== false && spawn.agent !== VIBE_CLI_AGENT[spawn.cli]) return undefined;
 		if (!/^[A-Za-z0-9_-]+$/.test(spawn.id) || spawn.childSessionFile !== `${spawn.id}.jsonl`) return undefined;
 		const artifactsDir = path.resolve(parentSessionFile.slice(0, -6));
@@ -793,6 +805,7 @@ export class VibeSessionRegistry {
 		) {
 			return;
 		}
+		await persistAgentTombstone(childSessionFile);
 		if (existing?.status === "aborted" && !existing.session) return;
 		if (existing && !registry.setStatus(id, "aborted", existing)) return;
 		if (existing && teardownDeadline !== undefined) {
@@ -869,9 +882,12 @@ export class VibeSessionRegistry {
 		for (const id of terminalIntents.keys()) {
 			const spawn = allSpawns.get(id);
 			if (!spawn) continue;
-			const childSessionFile = await this.#resolvePersistedChild(sessionFile, spawn, { requireAgentMatch: false });
+			const childSessionFile = await this.#resolvePersistedChild(session, sessionFile, spawn, {
+				requireAgentMatch: false,
+			});
 			if (!childSessionFile) continue;
 			await this.#markTerminalRef(id, scope.ownerId, childSessionFile);
+			this.#scheduleTerminalArchive(session);
 			this.#records.delete(scopeKey(scope, id));
 		}
 
@@ -879,7 +895,7 @@ export class VibeSessionRegistry {
 		for (const candidate of candidates.values()) {
 			const { spawn } = candidate;
 			if (candidate.tombstoneReason || terminalIntents.has(spawn.id) || candidate.turnCount < 1) continue;
-			const childSessionFile = await this.#resolvePersistedChild(sessionFile, spawn);
+			const childSessionFile = await this.#resolvePersistedChild(session, sessionFile, spawn);
 			if (!childSessionFile) continue;
 			const key = scopeKey(scope, spawn.id);
 			if (this.#records.has(key)) continue;
@@ -944,17 +960,33 @@ export class VibeSessionRegistry {
 		if (this.#terminatedScopes.has(scopeKey(scope, ""))) {
 			throw new ToolError("Vibe mode has exited; enter Vibe mode again before spawning a worker.");
 		}
-		const manager = this.#manager(session);
 		const { agent, modelOverride } = this.#resolveWorker(session, args.cli);
-		if (!session.agentOutputManager) {
-			session.agentOutputManager = new AgentOutputManager(session.getArtifactsDir ?? (() => null));
-		}
-		const reservedIds = this.#persistedIds(session, scope);
-		for (const ref of AgentRegistry.global().list()) reservedIds.add(ref.id);
-		await session.agentOutputManager.reserve(reservedIds);
-		const requestedName = args.name?.replace(/[^A-Za-z0-9_-]+/g, "").slice(0, 48);
-		const id = await session.agentOutputManager.allocate(requestedName || generateTaskName());
 		const parentSessionFile = scope.parentSessionFile;
+		let reservation: FanoutArchiveReservation | undefined;
+		if (parentSessionFile) {
+			const archive = session.getFanoutArchiveManager?.();
+			if (!archive) throw new ToolError("Fanout storage preflight is unavailable for this persistent session.");
+			reservation = await archive.preflight({
+				childCount: 1,
+				settings: fanoutArchiveSettings(session.settings),
+			});
+		}
+		let manager: AsyncJobManager;
+		let id: string;
+		try {
+			manager = this.#manager(session);
+			if (!session.agentOutputManager) {
+				session.agentOutputManager = new AgentOutputManager(session.getArtifactsDir ?? (() => null));
+			}
+			const reservedIds = this.#persistedIds(session, scope);
+			for (const ref of AgentRegistry.global().list()) reservedIds.add(ref.id);
+			await session.agentOutputManager.reserve(reservedIds);
+			const requestedName = args.name?.replace(/[^A-Za-z0-9_-]+/g, "").slice(0, 48);
+			id = await session.agentOutputManager.allocate(requestedName || generateTaskName());
+		} catch (error) {
+			reservation?.releaseUnclaimedChild();
+			throw error;
+		}
 		const childSessionName = `${id}.jsonl`;
 		const childSessionFile = parentSessionFile
 			? path.resolve(parentSessionFile.slice(0, -6), childSessionName)
@@ -977,6 +1009,7 @@ export class VibeSessionRegistry {
 			killed: false,
 			suspended: false,
 			terminalPersisted: false,
+			reservation,
 		};
 		const key = scopeKey(scope, id);
 		this.#records.set(key, record);
@@ -1000,6 +1033,7 @@ export class VibeSessionRegistry {
 			const jobId = this.#registerTurnJob(session, manager, record, args.prompt, { first: true });
 			return { id, jobId };
 		} catch (error) {
+			this.#finishStartupReservation(record);
 			record.killed = true;
 			record.state = "dead";
 			record.lastActivityAt = Date.now();
@@ -1051,7 +1085,9 @@ export class VibeSessionRegistry {
 		}
 
 		const manager = this.#manager(session);
-		const jobId = this.#registerTurnJob(session, manager, record, message, { first: false });
+		const jobId = this.#registerTurnJob(session, manager, record, message, {
+			first: false,
+		});
 		return { id: record.id, mode: "turn", jobId };
 	}
 
@@ -1300,14 +1336,21 @@ export class VibeSessionRegistry {
 		if (record.turn && manager) {
 			const job = manager.getJob(record.turn.jobId);
 			if (job) settlingJobs.add(job);
-			cancelledTurn = manager.cancel(record.turn.jobId, { ownerId: record.ownerId });
+			cancelledTurn = manager.cancel(record.turn.jobId, {
+				ownerId: record.ownerId,
+			});
 		}
+		if (record.startupClaim) await record.startupClaim.catch(() => {});
+		this.#finishStartupReservation(record);
 		record.state = "dead";
 		record.lastActivityAt = Date.now();
 		record.lastActivity = "killed";
 		const deadline = teardownDeadline ?? Date.now() + this.#teardownGraceMs;
 		const releaseTask = registered ? this.#trackAgentRelease(record.id, registered, "release") : undefined;
-		const jobCleanup = [...settlingJobs].map(job => ({ job, task: this.#trackJobSettlement(record, job) }));
+		const jobCleanup = [...settlingJobs].map(job => ({
+			job,
+			task: this.#trackJobSettlement(record, job),
+		}));
 		await waitForVibeTeardown(
 			[releaseTask, ...jobCleanup.map(entry => entry.task)].filter(task => task !== undefined),
 			deadline,
@@ -1321,14 +1364,17 @@ export class VibeSessionRegistry {
 			});
 		}
 		const terminalRef = registered ?? this.#registeredAgent(record) ?? null;
-		await this.#markTerminalRecord(record, terminalRef, deadline);
-		if (pendingJobs.length > 0) {
-			this.#continueKilledCleanup(
-				record,
-				pendingJobs.map(entry => entry.task),
-				registered,
-			);
-		}
+		const pendingTeardowns = [releaseTask, ...jobCleanup.map(entry => entry.task)].filter(
+			(task): task is TrackedVibeTeardown => task?.status() === "pending",
+		);
+		const sealTerminal = async (): Promise<void> => {
+			if (pendingTeardowns.length > 0) {
+				this.#continueKilledCleanup(session, record, pendingTeardowns, terminalRef);
+				return;
+			}
+			await this.#markTerminalRecord(session, record, terminalRef, deadline);
+		};
+		if (record.terminalPersisted) await sealTerminal();
 		if (persistenceError) {
 			let finalPersistenceError = persistenceError;
 			const recover = session.sessionManager?.recoverPersistenceFromCurrentState;
@@ -1341,6 +1387,7 @@ export class VibeSessionRegistry {
 						}
 					}
 					record.terminalPersisted = true;
+					await sealTerminal();
 				} catch (recoveryError) {
 					if (recoveryError instanceof SessionPersistenceIndeterminateError) {
 						finalPersistenceError = recoveryError;
@@ -1356,17 +1403,27 @@ export class VibeSessionRegistry {
 		return { id: record.id, cancelledTurn };
 	}
 
+	#scheduleTerminalArchive(session: VibeParentSession): void {
+		const archive = session.getFanoutArchiveManager?.();
+		if (!archive) return;
+		void archive.archiveTerminalChildren().catch(error => {
+			logger.warn("vibe: failed to archive terminal worker transcripts", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
+	}
+
 	async #markTerminalRecord(
+		session: VibeParentSession,
 		record: VibeRecord,
 		expected: AgentRef | null | undefined,
 		teardownDeadline: number,
 	): Promise<void> {
 		if (!record.childSessionFile) return;
 		try {
-			const persisted = await SessionManager.peekSessionInit(record.childSessionFile);
-			if (persisted?.init) {
-				await this.#markTerminalRef(record.id, record.ownerId, record.childSessionFile, expected, teardownDeadline);
-			}
+			await fs.stat(record.childSessionFile);
+			await this.#markTerminalRef(record.id, record.ownerId, record.childSessionFile, expected, teardownDeadline);
+			this.#scheduleTerminalArchive(session);
 		} catch (error) {
 			logger.warn("vibe: failed to retain terminal worker transcript", {
 				id: record.id,
@@ -1376,18 +1433,27 @@ export class VibeSessionRegistry {
 	}
 
 	#continueKilledCleanup(
+		session: VibeParentSession,
 		record: VibeRecord,
-		jobTasks: readonly TrackedVibeTeardown[],
-		expected: AgentRef | undefined,
+		teardownTasks: readonly TrackedVibeTeardown[],
+		expected: AgentRef | null | undefined,
 	): void {
-		void Promise.allSettled(jobTasks.map(task => task.promise))
-			.then(() => this.#markTerminalRecord(record, expected, Date.now() + this.#teardownGraceMs))
+		void Promise.allSettled(teardownTasks.map(task => task.promise))
+			.then(() => this.#markTerminalRecord(session, record, expected, Date.now() + this.#teardownGraceMs))
 			.catch(error => {
 				logger.warn("vibe: failed to finish killed worker cleanup", {
 					id: record.id,
 					error: error instanceof Error ? error.message : String(error),
 				});
 			});
+	}
+
+	#finishStartupReservation(record: VibeRecord): void {
+		const reservation = record.reservation;
+		if (!reservation) return;
+		record.reservation = undefined;
+		if (record.reservationClaimed) reservation.settleChild();
+		else reservation.releaseUnclaimedChild();
 	}
 
 	/** Build the ExecutorOptions for a first spawn, mirroring the `task`/eval-bridge plumbing. */
@@ -1401,6 +1467,21 @@ export class VibeSessionRegistry {
 		const sessionFile = session.getSessionFile();
 		const sessionArtifactsDir = sessionFile ? sessionFile.slice(0, -6) : null;
 		const artifactsDir = sessionArtifactsDir ?? path.join(os.tmpdir(), `omp-vibe-${Snowflake.next()}`);
+		signal.throwIfAborted();
+		if (record.reservation) {
+			const claim = record.reservation.claimChild();
+			record.startupClaim = claim;
+			try {
+				await claim;
+				record.reservationClaimed = true;
+				signal.throwIfAborted();
+			} catch (error) {
+				this.#finishStartupReservation(record);
+				throw error;
+			} finally {
+				if (record.startupClaim === claim) record.startupClaim = undefined;
+			}
+		}
 		await fs.mkdir(artifactsDir, { recursive: true });
 		if (!sessionArtifactsDir) registerArtifactsDir(artifactsDir);
 		const localProtocolOptions: LocalProtocolOptions = session.localProtocolOptions ?? {
@@ -1524,9 +1605,15 @@ export class VibeSessionRegistry {
 					throw new VibeTurnError(
 						`[vibe:${record.id} cli=${record.cli} turn=${turnIndex}] turn failed: ${reason}`,
 					);
+				} finally {
+					if (options.first) this.#finishStartupReservation(record);
 				}
 			},
-			{ id: `${record.id}-t${turnIndex}`, agentId: record.id, ownerId: record.ownerId },
+			{
+				id: `${record.id}-t${turnIndex}`,
+				agentId: record.id,
+				ownerId: record.ownerId,
+			},
 		);
 		turn.jobId = jobId;
 		record.turn = turn;
@@ -1553,6 +1640,9 @@ export class VibeSessionRegistry {
 		record.state = registered && (registered.status === "idle" || registered.status === "parked") ? "idle" : "dead";
 		if (record.state === "dead") {
 			record.terminalPersisted = await this.#appendTombstone(session, record, "unrecoverable");
+			if (record.terminalPersisted) {
+				await this.#markTerminalRecord(session, record, registered ?? null, Date.now() + this.#teardownGraceMs);
+			}
 			return;
 		}
 		const settledPersisted = await this.#appendLifecycleEvent(
@@ -1571,7 +1661,9 @@ export class VibeSessionRegistry {
 		if (record.queue.length === 0) return;
 		const nextMessage = record.queue.splice(0, record.queue.length).join("\n\n");
 		try {
-			this.#registerTurnJob(session, manager, record, nextMessage, { first: false });
+			this.#registerTurnJob(session, manager, record, nextMessage, {
+				first: false,
+			});
 		} catch (error) {
 			// Leave the messages recoverable: a later vibe_send flushes again.
 			record.queue.unshift(nextMessage);

@@ -18,9 +18,10 @@
  */
 import type { AgentRef } from "../registry/agent-registry";
 import { AgentRegistry } from "../registry/agent-registry";
+import { FanoutArchiveManager } from "../session/fanout-archive";
 import { formatSessionHistoryMarkdown } from "../session/session-history-format";
 import { loadSessionMessagesReadOnly } from "../session/session-loader";
-import { sessionFilesFromDisk } from "./registry-helpers";
+import { artifactsDirsFromRegistry, sessionFilesFromDisk } from "./registry-helpers";
 import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
 
 /** Humanize a last-activity timestamp as `Ns/Nm/Nh/Nd ago`. */
@@ -97,6 +98,11 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 			messages = ref.session.messages;
 			notes.push("Source: live session");
 		} else if (ref.sessionFile) {
+			if (!(await Bun.file(ref.sessionFile).exists())) {
+				const disk = await this.#resolveFromDisk(ref.id);
+				if (disk) return { ...disk, url: url.href };
+				throw new Error(`Agent ${ref.id} has no transcript: retained session file is missing`);
+			}
 			messages = await loadSessionMessagesReadOnly(ref.sessionFile);
 			notes.push(`Source: session file (read-only, ${ref.status})`);
 		} else {
@@ -107,7 +113,9 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 			throw new Error(`Agent ${ref.id} has no transcript: session is gone and no session file was retained`);
 		}
 
-		const content = formatSessionHistoryMarkdown(messages, { title: `${ref.id} (${ref.status})` });
+		const content = formatSessionHistoryMarkdown(messages, {
+			title: `${ref.id} (${ref.status})`,
+		});
 		return {
 			url: url.href,
 			content,
@@ -134,9 +142,20 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 				if (id === agentId) break;
 			}
 		}
+		if (!matchedId || !sessionFile) {
+			for (const artifactsDir of artifactsDirsFromRegistry()) {
+				const archived = await FanoutArchiveManager.forParent(artifactsDir).resolveArchivedTranscript(agentId);
+				if (!archived) continue;
+				matchedId = agentId;
+				sessionFile = archived;
+				break;
+			}
+		}
 		if (!matchedId || !sessionFile) return undefined;
 		const messages = await loadSessionMessagesReadOnly(sessionFile);
-		const content = formatSessionHistoryMarkdown(messages, { title: `${matchedId} (on disk)` });
+		const content = formatSessionHistoryMarkdown(messages, {
+			title: `${matchedId} (on disk)`,
+		});
 		return {
 			url: "",
 			content,
@@ -160,7 +179,13 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		const disk = await sessionFilesFromDisk();
 		for (const id of disk.keys()) {
 			if (registered.has(id)) continue;
-			entries.push({ id, status: "on disk", kind: "—", parent: "—", lastActivity: "—" });
+			entries.push({
+				id,
+				status: "on disk",
+				kind: "—",
+				parent: "—",
+				lastActivity: "—",
+			});
 		}
 
 		const lines: string[] = ["# Agents", ""];

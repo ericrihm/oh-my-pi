@@ -4,6 +4,7 @@ import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { registerPersistedSubagents } from "@oh-my-pi/pi-coding-agent/registry/persisted-agents";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { FanoutArchiveManager } from "@oh-my-pi/pi-coding-agent/session/fanout-archive";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 interface SessionStub {
@@ -20,7 +21,10 @@ function makeSessionStub(dispose?: () => Promise<void>): SessionStub {
 			await dispose?.();
 		},
 	};
-	return { session: stub as unknown as AgentSession, disposeCalls: () => calls };
+	return {
+		session: stub as unknown as AgentSession,
+		disposeCalls: () => calls,
+	};
 }
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -56,7 +60,14 @@ describe("AgentLifecycleManager", () => {
 	});
 
 	function registerIdleSub(id: string, session: AgentSession | null, sessionFile: string | null = `/tmp/${id}.jsonl`) {
-		return registry.register({ id, displayName: "task", kind: "sub", session, sessionFile, status: "idle" });
+		return registry.register({
+			id,
+			displayName: "task",
+			kind: "sub",
+			session,
+			sessionFile,
+			status: "idle",
+		});
 	}
 
 	it("registerIfAvailable never replaces a collision and reuses only the exact expected ref", () => {
@@ -80,7 +91,10 @@ describe("AgentLifecycleManager", () => {
 		const staleSession = makeSessionStub().session;
 		expect(registry.attachSession("generation-Sub", staleSession, undefined, parked)).toBe(false);
 		expect(registry.setStatus("generation-Sub", "idle", parked)).toBe(false);
-		expect(registry.get("generation-Sub")).toMatchObject({ status: "aborted", session: null });
+		expect(registry.get("generation-Sub")).toMatchObject({
+			status: "aborted",
+			session: null,
+		});
 
 		registry.unregister("generation-Sub", parked);
 		expect(registry.registerIfAvailable(next, parked)).toBeUndefined();
@@ -134,7 +148,10 @@ describe("AgentLifecycleManager", () => {
 			sessionFile: "/tmp/3-Sub.jsonl",
 			status: "parked",
 		});
-		lifecycle.adopt("3-Sub", { idleTtlMs: 0, revive: async () => revived.session });
+		lifecycle.adopt("3-Sub", {
+			idleTtlMs: 0,
+			revive: async () => revived.session,
+		});
 
 		const session = await lifecycle.ensureLive("3-Sub");
 
@@ -201,12 +218,18 @@ describe("AgentLifecycleManager", () => {
 
 		const revival = lifecycle.ensureLive("Revive-Killed");
 		expect(await lifecycle.release("Revive-Killed", ref, { tombstone: true })).toBe(true);
-		expect(registry.get("Revive-Killed")).toMatchObject({ status: "aborted", session: null });
+		expect(registry.get("Revive-Killed")).toMatchObject({
+			status: "aborted",
+			session: null,
+		});
 
 		gate.resolve();
 		await expect(revival).rejects.toThrow(/became terminal/);
 		expect(revived.disposeCalls()).toBe(1);
-		expect(registry.get("Revive-Killed")).toMatchObject({ status: "aborted", session: null });
+		expect(registry.get("Revive-Killed")).toMatchObject({
+			status: "aborted",
+			session: null,
+		});
 	});
 
 	it("ensureLive on an unknown id throws and points at history://", async () => {
@@ -214,7 +237,13 @@ describe("AgentLifecycleManager", () => {
 	});
 
 	it("ensureLive on a parked agent without a reviver throws as not revivable", async () => {
-		registry.register({ id: "5-Sub", displayName: "task", kind: "sub", session: null, status: "parked" });
+		registry.register({
+			id: "5-Sub",
+			displayName: "task",
+			kind: "sub",
+			session: null,
+			status: "parked",
+		});
 		lifecycle.adopt("5-Sub", { idleTtlMs: 0 });
 
 		await expect(lifecycle.ensureLive("5-Sub")).rejects.toThrow(/cannot be revived.*no reviver registered/);
@@ -620,5 +649,170 @@ describe("AgentLifecycleManager", () => {
 		const restoredRegistry = new AgentRegistry();
 		await registerPersistedSubagents(restoredRegistry, rootSessionFile);
 		expect(restoredRegistry.get(workerId)?.status).toBe("aborted");
+	});
+
+	it("schedules archive work only after a successful tombstone write and never for revivable releases", async () => {
+		using tempDir = TempDir.createSync("@omp-lifecycle-archive-");
+		const liveSessionFile = path.join(tempDir.path(), "Live.jsonl");
+		const deadSessionFile = path.join(tempDir.path(), "Dead.jsonl");
+		const callOrder: string[] = [];
+		const archive = {
+			archiveTerminalChildren: vi.fn(async () => {
+				expect(await Bun.file(`${deadSessionFile}.tombstone`).exists()).toBe(true);
+				callOrder.push("archive");
+			}),
+		};
+		const localLifecycle = new AgentLifecycleManager(registry);
+		await Promise.all([Bun.write(liveSessionFile, ""), Bun.write(deadSessionFile, "")]);
+
+		const live = registry.register({
+			id: "Live",
+			displayName: "live",
+			kind: "sub",
+			session: makeSessionStub(() => {
+				callOrder.push("live-dispose");
+				return Promise.resolve();
+			}).session,
+			sessionFile: liveSessionFile,
+			status: "idle",
+		});
+		const dead = registry.register({
+			id: "Dead",
+			displayName: "dead",
+			kind: "sub",
+			session: makeSessionStub(async () => {
+				expect(await Bun.file(`${deadSessionFile}.tombstone`).exists()).toBe(false);
+				callOrder.push("dead-dispose");
+			}).session,
+			sessionFile: deadSessionFile,
+			status: "running",
+		});
+		const unpersisted = registry.register({
+			id: "Unpersisted",
+			displayName: "unpersisted",
+			kind: "sub",
+			session: makeSessionStub().session,
+			status: "running",
+		});
+
+		await localLifecycle.release("Live", live);
+		expect(archive.archiveTerminalChildren).not.toHaveBeenCalled();
+
+		await localLifecycle.release("Dead", dead, {
+			tombstone: true,
+			terminalArchiveScheduler: archive,
+		});
+		expect(await Bun.file(`${deadSessionFile}.tombstone`).exists()).toBe(true);
+		expect(registry.get("Dead")).toMatchObject({
+			status: "aborted",
+			session: null,
+		});
+		expect(archive.archiveTerminalChildren).toHaveBeenCalledTimes(1);
+		expect(callOrder).toEqual(["live-dispose", "dead-dispose", "archive"]);
+
+		await localLifecycle.release("Dead", dead, { tombstone: true });
+		await localLifecycle.release("Unpersisted", unpersisted, {
+			tombstone: true,
+		});
+		expect(archive.archiveTerminalChildren).toHaveBeenCalledTimes(1);
+	});
+
+	it("retains each adopted child's own archive scheduler for later terminal releases", async () => {
+		using tempDir = TempDir.createSync("@omp-lifecycle-archive-owner-");
+		const firstFile = path.join(tempDir.path(), "First.jsonl");
+		const secondFile = path.join(tempDir.path(), "Second.jsonl");
+		await Promise.all([Bun.write(firstFile, ""), Bun.write(secondFile, "")]);
+		const firstArchive = {
+			archiveTerminalChildren: vi.fn().mockResolvedValue(undefined),
+		};
+		const secondArchive = {
+			archiveTerminalChildren: vi.fn().mockResolvedValue(undefined),
+		};
+		const first = registry.register({
+			id: "First",
+			displayName: "first",
+			kind: "sub",
+			session: null,
+			sessionFile: firstFile,
+			status: "idle",
+		});
+		const second = registry.register({
+			id: "Second",
+			displayName: "second",
+			kind: "sub",
+			session: null,
+			sessionFile: secondFile,
+			status: "idle",
+		});
+
+		lifecycle.adopt("First", { idleTtlMs: 0, terminalArchiveScheduler: firstArchive }, first);
+		lifecycle.adopt("Second", { idleTtlMs: 0, terminalArchiveScheduler: secondArchive }, second);
+		await lifecycle.release("First", first, { tombstone: true });
+		await lifecycle.release("Second", second, { tombstone: true });
+
+		expect(firstArchive.archiveTerminalChildren).toHaveBeenCalledTimes(1);
+		expect(secondArchive.archiveTerminalChildren).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not seal or schedule a terminal child until its session disposal succeeds", async () => {
+		using tempDir = TempDir.createSync("@omp-lifecycle-archive-dispose-");
+		const sessionFile = path.join(tempDir.path(), "Dead.jsonl");
+		await Bun.write(sessionFile, "");
+		const archive = {
+			archiveTerminalChildren: vi.fn().mockResolvedValue(undefined),
+		};
+		let failDispose = true;
+		const ref = registry.register({
+			id: "Dead",
+			displayName: "dead",
+			kind: "sub",
+			session: makeSessionStub(async () => {
+				if (failDispose) throw new Error("still writing");
+			}).session,
+			sessionFile,
+			status: "running",
+		});
+
+		await expect(
+			lifecycle.release("Dead", ref, {
+				tombstone: true,
+				terminalArchiveScheduler: archive,
+			}),
+		).rejects.toThrow("still writing");
+		expect(await Bun.file(`${sessionFile}.tombstone`).exists()).toBe(false);
+		expect(archive.archiveTerminalChildren).not.toHaveBeenCalled();
+		expect(registry.get("Dead")?.session).toBe(ref.session);
+
+		failDispose = false;
+		await lifecycle.release("Dead", ref, {
+			tombstone: true,
+			terminalArchiveScheduler: archive,
+		});
+		expect(await Bun.file(`${sessionFile}.tombstone`).exists()).toBe(true);
+		expect(archive.archiveTerminalChildren).toHaveBeenCalledTimes(1);
+	});
+
+	it("retains a restored child's original parent archive scheduler through cold adoption", async () => {
+		using tempDir = TempDir.createSync("@omp-lifecycle-archive-restored-");
+		const rootSessionFile = path.join(tempDir.path(), "main.jsonl");
+		const childSessionFile = path.join(tempDir.path(), "main", "Restored.jsonl");
+		const archive = {
+			archiveTerminalChildren: vi.fn().mockResolvedValue(undefined),
+		};
+		await Promise.all([Bun.write(rootSessionFile, ""), Bun.write(childSessionFile, "")]);
+		vi.spyOn(FanoutArchiveManager, "forParent").mockReturnValue(archive as never);
+
+		await registerPersistedSubagents(registry, rootSessionFile);
+		const ref = registry.get("Restored");
+		expect(ref).toMatchObject({
+			status: "parked",
+			sessionFile: childSessionFile,
+		});
+		lifecycle.setPersistedSubagentReviverFactory(async () => async () => makeSessionStub().session, 0);
+		await lifecycle.ensureLive("Restored");
+		await lifecycle.release("Restored", ref, { tombstone: true });
+
+		expect(FanoutArchiveManager.forParent).toHaveBeenCalledWith(path.dirname(childSessionFile));
+		expect(archive.archiveTerminalChildren).toHaveBeenCalledTimes(1);
 	});
 });

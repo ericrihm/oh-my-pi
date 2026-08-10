@@ -751,6 +751,20 @@ searxng:
 
 Provider credentials and custom model definitions are configured separately — see [Providers](./providers.md) and [Models](./models.md).
 
+### Fanout archive
+
+Persistent task and Vibe fanouts reserve **physical** filesystem headroom before child IDs, artifacts, jobs, or transcripts are created. Archive bytes are a separate **logical** retention budget: moving a terminal child into `.fanout-archive/` is a same-filesystem rename and gains `0 B` physical free space.
+
+| Key                                                 | Type    | Default      | Values / notes                                                                                                                               |
+| --------------------------------------------------- | ------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `task.fanoutArchive.enabled`                        | boolean | `true`       | Enables terminal archival. Disabling it retains the physical free-space preflight.                                                           |
+| `task.fanoutArchive.archiveLimitBytes`              | number  | `1073741824` | Logical cap for published archive entries per parent artifact directory. `0` disables archive moves; it does not disable physical preflight. |
+| `task.fanoutArchive.minimumFreeBytes`               | number  | `1073741824` | Physical headroom that must remain after reservations. `0` requires no additional minimum headroom.                                          |
+| `task.fanoutArchive.reserveBytesPerChild`           | number  | `67108864`   | Physical reservation for each requested persistent child. `0` reserves no estimated child growth.                                            |
+| `task.fanoutArchive.strictActiveTerminalLimitBytes` | number  | `0`          | Logical cap for eligible terminal bytes still at active paths. `0` disables this gate.                                                       |
+
+When a persistent fanout is rejected for physical space, choose one remedy: reduce the persistent child count, free space on the parent filesystem, or use non-persistent children. Raising the archive limit does not create physical headroom; archival movement gains `0 B` physical free space.
+
 ### Other groups
 
 `omp config list` exposes many more grouped settings, including: `task.*` (subagent concurrency, isolation, model overrides), `skills.*` and `commands.*` (discovery toggles), `mcp.*`, `github.*`, `async.*`, `goal.*`, `loop.*`, `todo.*`, `magicKeywords.*`, `ttsr.*` (time-traveling stream rules), `display.*`, `startup.*`, `share.*`, `collab.*`, `stt.*`/`tts.*`, `memories.*`/`hindsight.*`/`mnemopi.*` (memory backends), and `bashInterceptor.*`. Each follows the same type/default rules shown above.
