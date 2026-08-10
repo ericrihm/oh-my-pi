@@ -29,8 +29,8 @@ Recorded at `2026-08-10`. Scope is only `/Users/eric/dev/oh-my-pi-regulus-omp-su
   - standalone source remains without package authority
   - real nested SDK/subagent session rebuild inherits packaged authority; restricted/isolation reset clears it
 - `packages/coding-agent/test/extensibility/ext-model-query.test.ts`
-  - separate functional and configured-but-nonfunctional Kimi/Qwen cases
-  - credential-probe invocation, canonical selector metadata, exact effort, catalog-derived stable vendor ID, and unchanged opaque `family()`
+  - separate functional and configured-but-nonfunctional Kimi/Qwen cases that keep the same model in `getAvailable()`
+  - exact credential-probe invocation and result, canonical selector metadata, exact effort, catalog-derived stable vendor ID, and unchanged opaque `family()`
 - `packages/coding-agent/test/task/task-batch.test.ts`
   - `reviewOfRouteId` in flat and batch item schemas
   - absence of public `model`, route ID, router, and provenance controls
@@ -38,9 +38,9 @@ Recorded at `2026-08-10`. Scope is only `/Users/eric/dev/oh-my-pi-regulus-omp-su
 ## Formatting
 
 ```text
-$ node_modules/.bin/biome check --write packages/coding-agent/test/extensibility/task-router.test.ts packages/coding-agent/test/extensibility/task-router-phase2.test.ts packages/coding-agent/test/extensibility/extension-source-authority.test.ts packages/coding-agent/test/extensibility/ext-model-query.test.ts packages/coding-agent/test/task/task-batch.test.ts
+$ node_modules/.bin/biome check --write packages/coding-agent/test/extensibility/task-router.test.ts packages/coding-agent/test/extensibility/task-router-phase2.test.ts packages/coding-agent/test/extensibility/ext-model-query.test.ts
 exit 0
-Checked 5 files in 55ms. Fixed 3 files.
+Checked 3 files in 41ms. Fixed 1 file.
 ```
 
 ## Focused RED command
@@ -82,12 +82,12 @@ These failures occur at the missing public contracts or their first observable b
 The authoritative Phase 1 gate supersedes the earlier counts above. It keeps production code untouched and adds independent named assertions for the Phase 1 review findings:
 
 - real SDK assembly receives one initially unbound, one-shot router reference and binds it only after extension load;
-- a non-null ordered mixed-batch decision reaches native execution, while malformed, partial, overlong, reversed, refused, timed-out, and aborted routing all stop before allocation, registry/job registration, lifecycle, auth lookup where routing has not completed, or subprocess execution;
+- a complete non-null ordered mixed-batch decision is validated and attached through the actual SDK/`TaskTool` route handoff, while malformed, partial, overlong, reversed, refused, timed-out, and aborted routing all stop before allocation, registry/job registration, auth lookup where routing has not completed, or subprocess execution;
 - unsupported router API versions and competing router owners fail during session construction;
 - packaged `--plugin-dir` sources use real enum manifest grammar, reject invalid setting schemas, retain validated authority/defaults through loader and SDK forwarding, and enter a real nested session rebuild; only the child prompt is stopped after rebuilding, rather than mocking descriptor reuse;
 - restricted nested execution proves extension-isolation resets clear inherited authority;
 - linked disable/enable and routing settings are read freshly;
-- `resolveSelection()` has four independent Kimi/Qwen functional/nonfunctional cases. Each asserts the exact credential probe, canonical provider/id, exact effort, and catalog-derived stable vendor ID without changing opaque `family()`.
+- `resolveSelection()` has four independent Kimi/Qwen credential-working/credential-missing cases. Both states keep the model in `getAvailable()` and assert the exact `getApiKey()` probe, so deriving `authenticated` from list membership cannot pass.
 
 Authoritative Phase 1 focused command:
 
@@ -97,24 +97,24 @@ exit 1
 23 pass
 23 fail
 135 expect() calls
-Ran 46 tests across 4 files. [1285.00ms]
+Ran 46 tests across 4 files. [2.69s]
 ```
 
 All 23 Phase 1 failures stop at absent Phase 1 contracts or their first observable behavior. The nested forwarding tests currently stop at the missing packaged descriptor; once that contract exists they continue through real `TaskTool` execution and real child `createAgentSession` reconstruction. No failure is a syntax, native-load, network, or paid-provider failure.
 
 ## Phase 2 RED quarantine
 
-Strict preflight, lifecycle callbacks, and review-receipt contracts are intentionally isolated from the Phase 1 green gate in `packages/coding-agent/test/extensibility/task-router-phase2.test.ts`. The receipt seam test explicitly finalizes oversized raw writer output, creates a truncated preview, and requires receipt hashes, byte counts, retained writer bytes, and the trusted review frame to derive from the full finalized output instead of the preview.
+Strict provider execution, sealed `ResolvedStrictRouteSelection`, prewalk suppression, lifecycle callbacks, and review-receipt contracts are intentionally isolated from the Phase 1 green gate in `packages/coding-agent/test/extensibility/task-router-phase2.test.ts`. Phase 1 asserts only complete decision validation/order and the hidden route handoff. The oversized receipt test runs end to end through actual `TaskTool` and `runSubprocess`/`finalizeRunResult` wiring with multibyte sentinel-bearing output above 500,000 bytes. It requires the `SingleResult.output` and parent/model preview to be truncated while the trusted receipt digest, byte count, and reviewer frame retain the complete finalized UTF-8 writer output.
 
 ```text
 $ PI_COMPILED=1 /Users/eric/.cache/omp-bun/node_modules/.bin/bun test packages/coding-agent/test/extensibility/task-router-phase2.test.ts
 exit 1
 0 pass
-9 fail
-15 expect() calls
-Ran 9 tests across 1 file. [915.00ms]
+10 fail
+16 expect() calls
+Ran 10 tests across 1 file. [2.01s]
 ```
 
-These nine Phase 2 failures are recorded now but are not part of the Phase 1 green criterion. They cover strict effort/vendor/max-effort/live-auth preflight, delayed and failed lifecycle callbacks, once-only settlement, end-to-end writer/reviewer framing, and full-output receipt construction before UI preview truncation.
+These ten Phase 2 failures are recorded now but are not part of the Phase 1 green criterion. They cover successful sealed-selection execution, strict effort/vendor/max-effort/live-auth refusal, delayed and failed lifecycle callbacks, once-only settlement, end-to-end writer/reviewer framing, and full-output receipt capture before `truncateTail`.
 
 No production file was changed. No provider or paid model call ran.

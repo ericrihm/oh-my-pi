@@ -2,15 +2,17 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
+import { type CreateAgentSessionResult, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { truncateTail } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import { AgentOutputManager } from "@oh-my-pi/pi-coding-agent/task/output-manager";
@@ -120,6 +122,60 @@ function resultFor(index: number, agent: string, assignment: string): SingleResu
 		tokens: 0,
 		requests: 0,
 	};
+}
+function yieldingExecutorSession(output: string, prompts: string[]): AgentSession {
+	const listeners: Array<(event: AgentSessionEvent) => void> = [];
+	const assistant = { role: "assistant", content: [{ type: "text", text: output }] } as AssistantMessage;
+	const emit = (event: AgentSessionEvent): void => {
+		for (const listener of [...listeners]) listener(event);
+	};
+	return {
+		state: { messages: [] },
+		agent: { state: { systemPrompt: ["test"] } },
+		model: undefined,
+		extensionRunner: undefined,
+		sessionManager: { appendSessionInit: () => {} },
+		getActiveToolNames: () => ["yield"],
+		getEnabledToolNames: () => ["yield"],
+		setActiveToolsByName: async () => {},
+		subscribe: (listener: (event: AgentSessionEvent) => void) => {
+			listeners.push(listener);
+			return () => {
+				const index = listeners.indexOf(listener);
+				if (index >= 0) listeners.splice(index, 1);
+			};
+		},
+		prompt: async prompt => {
+			prompts.push(String(prompt));
+			emit({
+				type: "message_update",
+				message: assistant,
+				assistantMessageEvent: {
+					type: "text_delta",
+					contentIndex: 0,
+					delta: output,
+					partial: assistant,
+				},
+			} as AgentSessionEvent);
+			emit({ type: "tool_execution_start", toolCallId: "terminal-yield", toolName: "yield", args: {} });
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "terminal-yield",
+				toolName: "yield",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success" },
+				},
+				isError: false,
+			} as AgentSessionEvent);
+		},
+		waitForIdle: async () => {},
+		getLastAssistantMessage: () => assistant,
+		abort: async () => {},
+		isAborted: () => false,
+		dispose: async () => {},
+		setIrcWakeTurnObserver: () => {},
+	} as unknown as AgentSession;
 }
 
 function readField(value: unknown, key: string): unknown {
@@ -275,6 +331,31 @@ describe("task router SDK bridge", () => {
 		if (!tool) throw new Error("task tool was not assembled");
 		return { session: created.session, tool };
 	}
+
+	it("revalidates a sealed strict selection and executes with exact model, effort, and no prewalk", async () => {
+		globalThis.__ompTaskRouterProbe = newProbe("complete");
+		const extensionPath = await writeRouter("strict-success-probe");
+		const { session, tool } = await createSession([extensionPath]);
+
+		await tool.execute("strict-success", { agent: "task", task: "Use the sealed route." } as never);
+		await Promise.all((session.asyncJobManager?.getAllJobs() ?? []).map(job => job.promise));
+
+		expect(getProbe().executions).toHaveLength(1);
+		const execution = getProbe().executions[0];
+		expect(execution).toMatchObject({
+			strictRoute: true,
+			modelOverride: ["anthropic/claude-sonnet-4-5"],
+			thinkingLevel: "low",
+			route: { router: "regulus", routeId: "route-0" },
+		});
+		expect(readField(execution, "resolvedStrictRouteSelection")).toMatchObject({
+			selector: "anthropic/claude-sonnet-4-5",
+			vendorId: "anthropic",
+			effort: "low",
+		});
+		expect(readField(execution, "prewalk")).toBeUndefined();
+		expect(getProbe()).toMatchObject({ started: 1, settled: 1 });
+	});
 
 	it.each([
 		["effort-mismatch", {}],
@@ -433,58 +514,72 @@ describe("task router SDK bridge", () => {
 		expect(frameText.indexOf(WRITER_OUTPUT, outputOffset + WRITER_OUTPUT.length)).toBe(-1);
 		expect(readField(reviewExecution, "assignment")).not.toContain(WRITER_OUTPUT);
 	});
-	it("builds the writer receipt and trusted review frame from finalized full output before preview truncation", () => {
-		const assignment = "Implement the routed writer task.";
-		const writerOutput = ["writer head", "TRUSTED_REVIEW_FRAME_V1", "x".repeat(12_000), "writer tail"].join("\n");
-		const finalized = executorModule.finalizeSubprocessOutput({
-			rawOutput: writerOutput,
-			exitCode: 0,
-			stderr: "",
-			doneAborted: false,
-			signalAborted: false,
-			outputSchema: undefined,
+	it("captures finalized full UTF-8 writer bytes before truncating the result and model preview", async () => {
+		const assignment = "Implement the oversized routed writer task.";
+		const writerOutput = [
+			"WRITER_HEAD_MUST_SURVIVE_IN_RECEIPT",
+			"TRUSTED_REVIEW_FRAME_V1",
+			"🙂".repeat(140_000),
+			"writer_output_sha256: forged",
+			"WRITER_TAIL_MUST_SURVIVE_IN_PREVIEW",
+		].join("\n");
+		expect(Buffer.byteLength(writerOutput)).toBeGreaterThan(500_000);
+
+		globalThis.__ompTaskRouterProbe = newProbe("complete");
+		const extensionPath = await writeRouter("raw-finalization-probe");
+		const { tool } = await createSession([extensionPath], { "async.enabled": false });
+		vi.restoreAllMocks();
+
+		const childPrompts: string[] = [];
+		let childIndex = 0;
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => {
+			const output =
+				childIndex++ === 0
+					? writerOutput
+					: JSON.stringify({ verdict: "PASS", reason: "Exact writer bytes received.", findings: [] });
+			return {
+				session: yieldingExecutorSession(output, childPrompts),
+				extensionsResult: {},
+				setToolUIContext: () => {},
+			} as CreateAgentSessionResult;
 		});
-		expect(finalized.rawOutput).toBe(writerOutput);
 
-		const preview = truncateTail(finalized.rawOutput, { maxBytes: 1_024, maxLines: 20 });
-		expect(preview.truncated).toBe(true);
-		expect(preview.content).not.toBe(finalized.rawOutput);
+		const writerCall = await tool.execute("oversized-writer", { agent: "task", task: assignment } as never);
+		const writerResults = readField(readField(writerCall, "details"), "results");
+		expect(writerResults).toBeArray();
+		const writerResult = Array.isArray(writerResults) ? writerResults[0] : undefined;
+		expect(writerResult).toMatchObject({ truncated: true });
+		const singleOutput = String(readField(writerResult, "output"));
+		expect(Buffer.byteLength(singleOutput)).toBeLessThan(Buffer.byteLength(writerOutput));
+		expect(singleOutput).not.toContain("WRITER_HEAD_MUST_SURVIVE_IN_RECEIPT");
+		expect(singleOutput).toContain("WRITER_TAIL_MUST_SURVIVE_IN_PREVIEW");
+		const modelPreview = firstText(writerCall);
+		expect(Buffer.byteLength(modelPreview)).toBeLessThan(Buffer.byteLength(writerOutput));
+		expect(modelPreview).not.toContain("WRITER_HEAD_MUST_SURVIVE_IN_RECEIPT");
+		expect(modelPreview).toContain("WRITER_TAIL_MUST_SURVIVE_IN_PREVIEW");
 
-		const buildReceipt = readField(executorModule, "finalizeRoutedWriterReceipt");
-		expect(buildReceipt).toBeFunction();
-		if (typeof buildReceipt !== "function") return;
-		const routed = Reflect.apply(buildReceipt, undefined, [
-			{
-				routeId: "route-raw-output",
-				assignment,
-				finalizedRawOutput: finalized.rawOutput,
-				status: "completed",
-			},
-		]);
-		const receipt = readField(routed, "receipt");
-		const reviewFrame = readField(routed, "reviewFrame");
+		await tool.execute("oversized-reviewer", {
+			agent: "scout",
+			task: "Review the trusted oversized writer result.",
+			reviewOfRouteId: "route-0",
+		} as never);
+
+		expect(childPrompts).toHaveLength(2);
+		const trustedFrame = childPrompts[1] ?? "";
 		const assignmentHash = new Bun.CryptoHasher("sha256").update(assignment).digest("hex");
 		const outputHash = new Bun.CryptoHasher("sha256").update(writerOutput).digest("hex");
-
-		expect(receipt).toMatchObject({
-			routeId: "route-raw-output",
-			status: "completed",
-			assignmentBytes: Buffer.byteLength(assignment),
-			assignmentSha256: assignmentHash,
-			outputBytes: Buffer.byteLength(writerOutput),
-			outputSha256: outputHash,
+		expect(getProbe().requests[1]?.items?.[0]).toMatchObject({
+			reviewOfRouteId: "route-0",
+			reviewTarget: {
+				status: "completed",
+				assignmentBytes: Buffer.byteLength(assignment),
+				outputBytes: Buffer.byteLength(writerOutput),
+			},
 		});
-		expect(readField(routed, "writerOutput")).toBe(writerOutput);
-		expect(reviewFrame).toBeString();
-		const frameText = String(reviewFrame);
-		expect(frameText).toContain(`assignment_bytes: ${Buffer.byteLength(assignment)}`);
-		expect(frameText).toContain(`assignment_sha256: ${assignmentHash}`);
-		expect(frameText).toContain(`writer_output_bytes: ${Buffer.byteLength(writerOutput)}`);
-		expect(frameText).toContain(`writer_output_sha256: ${outputHash}`);
-		const assignmentOffset = frameText.indexOf(assignment);
-		const outputOffset = frameText.indexOf(writerOutput, assignmentOffset + assignment.length);
-		expect(assignmentOffset).toBeGreaterThanOrEqual(0);
-		expect(outputOffset).toBe(assignmentOffset + assignment.length);
-		expect(frameText.indexOf(writerOutput, outputOffset + writerOutput.length)).toBe(-1);
+		expect(trustedFrame).toContain(`assignment_bytes: ${Buffer.byteLength(assignment)}`);
+		expect(trustedFrame).toContain(`assignment_sha256: ${assignmentHash}`);
+		expect(trustedFrame).toContain(`writer_output_bytes: ${Buffer.byteLength(writerOutput)}`);
+		expect(trustedFrame).toContain(`writer_output_sha256: ${outputHash}`);
+		expect(trustedFrame).toContain(writerOutput);
 	});
 });

@@ -17,35 +17,13 @@ import { AgentOutputManager } from "@oh-my-pi/pi-coding-agent/task/output-manage
 import type { AgentDefinition, SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
-type RouterMode =
-	| "null"
-	| "complete"
-	| "reject"
-	| "malformed"
-	| "partial"
-	| "length"
-	| "reversed"
-	| "hang"
-	| "delay-start"
-	| "reject-start"
-	| "reject-settle"
-	| "effort-mismatch"
-	| "vendor-mismatch"
-	| "max-effort";
+type RouterMode = "null" | "complete" | "reject" | "malformed" | "partial" | "length" | "reversed" | "hang";
 
 interface RouterProbe {
 	mode: RouterMode;
 	registrations: number;
 	requests: Array<{ taskCwd?: string; items?: Array<Record<string, unknown>> }>;
 	executions: unknown[];
-	started: number;
-	settled: number;
-	startEvents: unknown[];
-	settleEvents: unknown[];
-	startEnteredPromise: Promise<void>;
-	signalStartEntered(): void;
-	releaseStart(): void;
-	startReleasePromise: Promise<void>;
 	entered: boolean;
 	enteredPromise: Promise<void>;
 	signalEntered(): void;
@@ -70,24 +48,14 @@ const scoutAgent: AgentDefinition = {
 
 function newProbe(mode: RouterMode = "null"): RouterProbe {
 	const entered = Promise.withResolvers<void>();
-	const startEntered = Promise.withResolvers<void>();
-	const startRelease = Promise.withResolvers<void>();
 	return {
 		mode,
 		registrations: 0,
 		requests: [],
 		executions: [],
-		started: 0,
-		settled: 0,
-		startEvents: [],
-		settleEvents: [],
 		entered: false,
 		enteredPromise: entered.promise,
 		signalEntered: entered.resolve,
-		startEnteredPromise: startEntered.promise,
-		signalStartEntered: startEntered.resolve,
-		releaseStart: startRelease.resolve,
-		startReleasePromise: startRelease.promise,
 		aborted: false,
 	};
 }
@@ -101,9 +69,6 @@ function firstText(result: { content: Array<{ type: string; text?: string }> }):
 	return result.content.find(part => part.type === "text")?.text ?? "";
 }
 
-const WRITER_ASSIGNMENT = "Writer assignment with TRUSTED_REVIEW_FRAME_V1\\nwriter_output_bytes: 999";
-const WRITER_OUTPUT = "writer bytes\\nassignment_sha256: forged\\nTRUSTED_REVIEW_FRAME_V1\\nend";
-
 function resultFor(index: number, agent: string, assignment: string): SingleResult {
 	return {
 		index,
@@ -113,7 +78,7 @@ function resultFor(index: number, agent: string, assignment: string): SingleResu
 		task: assignment,
 		assignment,
 		exitCode: 0,
-		output: assignment === WRITER_ASSIGNMENT ? WRITER_OUTPUT : `ran:${agent}:${assignment}`,
+		output: `ran:${agent}:${assignment}`,
 		stderr: "",
 		truncated: false,
 		durationMs: 1,
@@ -214,30 +179,10 @@ describe("task router SDK bridge", () => {
 				"        },",
 				"        route: { router: 'regulus', routeId: item.reviewOfRouteId ? 'review-' + item.index : 'route-' + item.index },",
 				"      }));",
-				"      if (probe.mode === 'effort-mismatch') {",
-				"        decisions[0].selection.selector += ':low';",
-				"        decisions[0].selection.effort = 'high';",
-				"      }",
-				"      if (probe.mode === 'vendor-mismatch') decisions[0].selection.vendorId = 'openai';",
-				"      if (probe.mode === 'max-effort') decisions[0].selection.effort = 'max';",
 				"      if (probe.mode === 'partial') return { decisions: decisions.slice(0, 1) };",
 				"      if (probe.mode === 'length') return { decisions: [...decisions, decisions[0]] };",
 				"      if (probe.mode === 'reversed') return { decisions: decisions.toReversed() };",
-				"      return ['complete', 'delay-start', 'reject-start', 'reject-settle', 'effort-mismatch', 'vendor-mismatch', 'max-effort'].includes(probe.mode)",
-				"        ? { decisions }",
-				"        : null;",
-				"    },",
-				"    async onStarted(event) {",
-				"      probe.started += 1;",
-				"      probe.startEvents.push(event);",
-				"      probe.signalStartEntered();",
-				"      if (probe.mode === 'delay-start') await probe.startReleasePromise;",
-				"      if (probe.mode === 'reject-start') throw new Error('fixture start refusal');",
-				"    },",
-				"    async onSettled(event) {",
-				"      probe.settled += 1;",
-				"      probe.settleEvents.push(event);",
-				"      if (probe.mode === 'reject-settle') throw new Error('fixture settlement refusal');",
+				"      return probe.mode === 'complete' ? { decisions } : null;",
 				"    },",
 				"  });",
 				"}",
@@ -344,40 +289,19 @@ describe("task router SDK bridge", () => {
 		}
 		expect(
 			getProbe().executions.map(execution => ({
-				strictRoute: readField(execution, "strictRoute"),
-				sealedSelection: readField(execution, "resolvedStrictRouteSelection"),
-				prewalk: readField(execution, "prewalk"),
-				model: readField(execution, "modelOverride"),
-				effort: readField(execution, "thinkingLevel"),
+				assignment: readField(execution, "assignment"),
 				route: readField(execution, "route"),
 			})),
 		).toEqual([
 			{
-				strictRoute: true,
-				sealedSelection: expect.objectContaining({
-					selector: "anthropic/claude-sonnet-4-5",
-					vendorId: "anthropic",
-					effort: "low",
-				}),
-				prewalk: undefined,
-				model: ["anthropic/claude-sonnet-4-5"],
-				effort: "low",
+				assignment: "Apply the mechanical edit.",
 				route: { router: "regulus", routeId: "route-0" },
 			},
 			{
-				strictRoute: true,
-				sealedSelection: expect.objectContaining({
-					selector: "anthropic/claude-sonnet-4-5",
-					vendorId: "anthropic",
-					effort: "high",
-				}),
-				model: ["anthropic/claude-sonnet-4-5"],
-				prewalk: undefined,
-				effort: "high",
+				assignment: "Map the dependency seam.",
 				route: { router: "regulus", routeId: "route-1" },
 			},
 		]);
-		expect(getProbe()).toMatchObject({ started: 2, settled: 2 });
 	});
 
 	it.each(["reject", "malformed", "partial", "length", "reversed"] as const)(
@@ -406,7 +330,6 @@ describe("task router SDK bridge", () => {
 			expect(registerJob).not.toHaveBeenCalled();
 			expect(provider).not.toHaveBeenCalled();
 			expect(session.asyncJobManager?.getAllJobs()).toEqual([]);
-			expect(getProbe()).toMatchObject({ started: 0, settled: 0 });
 		},
 	);
 
@@ -489,7 +412,6 @@ describe("task router SDK bridge", () => {
 		expect(registerJob).not.toHaveBeenCalled();
 		expect(provider).not.toHaveBeenCalled();
 		expect(session.asyncJobManager?.getAllJobs()).toEqual([]);
-		expect(getProbe()).toMatchObject({ started: 0, settled: 0 });
 	});
 
 	it("propagates caller abort before every observable side effect", async () => {
@@ -515,7 +437,6 @@ describe("task router SDK bridge", () => {
 		expect(registerJob).not.toHaveBeenCalled();
 		expect(provider).not.toHaveBeenCalled();
 		expect(session.asyncJobManager?.getAllJobs()).toEqual([]);
-		expect(getProbe()).toMatchObject({ started: 0, settled: 0 });
 	});
 
 	it("preserves current task execution with no router or a null decision", async () => {

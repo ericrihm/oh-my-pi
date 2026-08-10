@@ -54,15 +54,16 @@ const configured = [claude, gpt, kimi, qwen] as Model<Api>[];
 
 /** Minimal live-auth registry stub for the model facade and core resolver. */
 function registry(
-	functionalProviders = new Set(configured.map(entry => entry.provider)),
+	authenticatedProviders = new Set(configured.map(entry => entry.provider)),
 	credentialChecks: string[] = [],
 ): ModelRegistry {
 	return {
 		getAll: () => configured,
-		getAvailable: () => configured.filter(entry => functionalProviders.has(entry.provider)),
+		// Configuration and credential health are deliberately independent.
+		getAvailable: () => configured,
 		getApiKey: async (entry: Model<Api>) => {
 			credentialChecks.push(entry.provider);
-			return functionalProviders.has(entry.provider) ? "working-key" : undefined;
+			return authenticatedProviders.has(entry.provider) ? "working-key" : undefined;
 		},
 	} as unknown as ModelRegistry;
 }
@@ -125,11 +126,11 @@ describe("createExtensionModelQuery", () => {
 
 	test("resolveSelection() reports configured Kimi nonfunctional after probing its credential", async () => {
 		const credentialChecks: string[] = [];
-		const functionalProviders = new Set(configured.map(entry => entry.provider));
-		functionalProviders.delete("openrouter");
-		const modelRegistry = registry(functionalProviders, credentialChecks);
+		const authenticatedProviders = new Set(configured.map(entry => entry.provider));
+		authenticatedProviders.delete("openrouter");
+		const modelRegistry = registry(authenticatedProviders, credentialChecks);
 		const q = createExtensionModelQuery(modelRegistry, undefined, () => undefined);
-		expect(modelRegistry.getAvailable()).not.toContain(kimi);
+		expect(modelRegistry.getAvailable()).toContain(kimi);
 
 		const selection = await q.resolveSelection("openrouter/moonshotai/kimi-k3:max");
 
@@ -159,11 +160,11 @@ describe("createExtensionModelQuery", () => {
 
 	test("resolveSelection() reports configured Qwen nonfunctional after probing its credential", async () => {
 		const credentialChecks: string[] = [];
-		const functionalProviders = new Set(configured.map(entry => entry.provider));
-		functionalProviders.delete("together");
-		const modelRegistry = registry(functionalProviders, credentialChecks);
+		const authenticatedProviders = new Set(configured.map(entry => entry.provider));
+		authenticatedProviders.delete("together");
+		const modelRegistry = registry(authenticatedProviders, credentialChecks);
 		const q = createExtensionModelQuery(modelRegistry, undefined, () => undefined);
-		expect(modelRegistry.getAvailable()).not.toContain(qwen);
+		expect(modelRegistry.getAvailable()).toContain(qwen);
 
 		const selection = await q.resolveSelection("together/qwen/qwen3.6-27b:high");
 
