@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed persistent high-fanout sessions exhausting active transcript storage by preflighting child reservations, archiving only sealed terminal child logs, and keeping active transcripts and history summaries authoritative.
+- Fixed persistent high-fanout sessions exhausting active transcript storage by preflighting child reservations, archiving only sealed terminal child logs, and keeping active transcripts and history summaries authoritative. An archive transaction interrupted by a crash is recovered on the first archive access after restart, so a transcript caught mid-move is never left staged.
 
 ## [17.2.12] - 2026-08-08
 

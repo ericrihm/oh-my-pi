@@ -269,6 +269,8 @@ export class FanoutArchiveManager {
 	#mutex = Promise.resolve();
 	#transactionSequence = 0;
 	#archivedArtifactPaths = new Map<string, string>();
+	#recovered = false;
+	#recovery: Promise<void> | undefined;
 
 	private constructor(parentArtifactsDir: string, dependencies?: FanoutArchiveDependencies) {
 		this.parentArtifactsDir = parentArtifactsDir;
@@ -309,6 +311,7 @@ export class FanoutArchiveManager {
 	}
 
 	async preflight(request: FanoutPreflightRequest): Promise<FanoutArchiveReservation> {
+		await this.#ensureRecovered();
 		return this.#withinMutex(async () => {
 			const settings = request.settings;
 			const childCount = request.childCount;
@@ -407,6 +410,7 @@ export class FanoutArchiveManager {
 	}
 
 	async archiveTerminalChildren(): Promise<FanoutArchiveSnapshot> {
+		await this.#ensureRecovered();
 		return this.#withinMutex(async () => {
 			const dependencies = this.#dependencies;
 			if (!dependencies || !this.#settings.enabled) return this.snapshot();
@@ -468,6 +472,29 @@ export class FanoutArchiveManager {
 		});
 	}
 
+	/**
+	 * Run {@link recover} at most once per parent, before the first archive
+	 * operation of the process.
+	 *
+	 * Recovery is gated here rather than at session startup because the archive is
+	 * reached from several independent entry points (`history://`, `artifact://`,
+	 * the registry helpers, Task and Vibe), each of which calls `forParent` on its
+	 * own. A single startup call would leave every other path able to observe, or
+	 * archive on top of, an interrupted transaction.
+	 *
+	 * Must be awaited *outside* `#withinMutex`: the mutex is a non-reentrant
+	 * promise chain and `recover` takes it itself.
+	 */
+	#ensureRecovered(): Promise<void> {
+		if (this.#recovered) return Promise.resolve();
+		// A failed recovery is deliberately not memoized -- the next entry point
+		// retries instead of permanently refusing every archive operation.
+		this.#recovery ??= this.recover().finally(() => {
+			this.#recovery = undefined;
+		});
+		return this.#recovery;
+	}
+
 	async recover(): Promise<void> {
 		await this.#withinMutex(async () => {
 			const dependencies = this.#dependencies;
@@ -492,6 +519,7 @@ export class FanoutArchiveManager {
 			}
 			await this.#rebuildArchivedArtifactIndex();
 		});
+		this.#recovered = true;
 	}
 
 	snapshot(): FanoutArchiveSnapshot {
@@ -502,6 +530,7 @@ export class FanoutArchiveManager {
 	}
 
 	async resolveArchivedTranscript(childId: string): Promise<string | undefined> {
+		await this.#ensureRecovered();
 		return this.#withinMutex(async () => {
 			const entryId = await this.#archiveEntryId(childId);
 			if (!entryId) return undefined;
@@ -512,6 +541,7 @@ export class FanoutArchiveManager {
 
 	async resolveArchivedArtifact(artifactId: string): Promise<string | undefined> {
 		if (!/^\d+$/.test(artifactId)) return undefined;
+		await this.#ensureRecovered();
 		return this.#withinMutex(async () => {
 			await this.#rebuildArchivedArtifactIndex(true);
 			return this.#archivedArtifactPaths.get(artifactId);
@@ -519,6 +549,7 @@ export class FanoutArchiveManager {
 	}
 
 	async archivedArtifactIds(): Promise<readonly string[]> {
+		await this.#ensureRecovered();
 		return this.#withinMutex(async () => {
 			await this.#rebuildArchivedArtifactIndex(true);
 			return [...this.#archivedArtifactPaths.keys()];

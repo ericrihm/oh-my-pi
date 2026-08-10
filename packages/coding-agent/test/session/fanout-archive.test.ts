@@ -579,6 +579,30 @@ describe("fanout archive", () => {
 			expect(fixture.files.unlinkCallsForData).toBe(0);
 		},
 	);
+	it.each(["archiveTerminalChildren", "resolveArchivedTranscript"] as const)(
+		"recovers an interrupted transaction on first %s without an explicit recover()",
+		async entryPoint => {
+			using temp = TempDir.createSync("@omp-fanout-archive-implicit-recovery-");
+			const fixture = await parentFixture(temp.path());
+			await fixture.writeChild("Dead", { terminalAt: 1, spills: ["17.bash.log"] });
+			fixture.files.failAt("after-transcript-rename");
+
+			const initial = fixture.manager(Number.MAX_SAFE_INTEGER);
+			await expect(initial.archiveTerminalChildren()).rejects.toThrow();
+			fixture.files.failAt(undefined);
+
+			// Nothing in production calls recover(); a restarted process reaches the
+			// archive only through these entry points, so they must finalize the
+			// interrupted transaction themselves or the transcript stays in .staging.
+			const restarted = fixture.restartManager(Number.MAX_SAFE_INTEGER);
+			if (entryPoint === "archiveTerminalChildren") await restarted.archiveTerminalChildren();
+			else await restarted.resolveArchivedTranscript("Dead");
+
+			expect(await fixture.hasOnlyCompleteActiveOrPublishedEntry("Dead")).toBe(true);
+			expect(fixture.files.copyCalls).toBe(0);
+			expect(fixture.files.unlinkCallsForData).toBe(0);
+		},
+	);
 	it("preserves the journal and reports an unrecoverable missing staged file", async () => {
 		using temp = TempDir.createSync("@omp-fanout-archive-missing-staged-");
 		const fixture = await parentFixture(temp.path());
