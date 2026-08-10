@@ -301,20 +301,27 @@ export class ModelRegistry {
 	 * in that case so already-warm sessions are unaffected. Discovery errors
 	 * remain swallowed by `refreshInBackground`'s existing `.catch`.
 	 */
-	async awaitBackgroundRefresh(): Promise<void> {
-		if (this.#backgroundRefresh) {
-			await this.#backgroundRefresh;
-		}
+	async awaitBackgroundRefresh(options?: { signal?: AbortSignal }): Promise<void> {
+		options?.signal?.throwIfAborted();
+		if (this.#backgroundRefresh) await this.#backgroundRefresh;
+		options?.signal?.throwIfAborted();
 	}
 
-	async refreshProvider(providerId: string, strategy: ModelRefreshStrategy = "online"): Promise<void> {
+	async refreshProvider(
+		providerId: string,
+		strategy: ModelRefreshStrategy = "online",
+		options?: { signal?: AbortSignal },
+	): Promise<void> {
+		options?.signal?.throwIfAborted();
 		this.#reloadStaticModels();
 		for (const selector of this.#suppressedSelectors.keys()) {
 			if (selector.startsWith(`${providerId}/`)) {
 				this.#suppressedSelectors.delete(selector);
 			}
 		}
+		options?.signal?.throwIfAborted();
 		await this.#refreshRuntimeDiscoveries(strategy, new Set([providerId]));
+		options?.signal?.throwIfAborted();
 		// #reloadStaticModels above may have rebuilt #models from static sources,
 		// dropping models previously discovered by OTHER runtime providers (their
 		// fetchDynamicModels results live only in #models + the SQLite cache, not
@@ -326,7 +333,9 @@ export class ModelRegistry {
 		);
 		if (otherRuntimeProviderIds.size > 0) {
 			await this.#refreshRuntimeDiscoveries("online-if-uncached", otherRuntimeProviderIds);
+			options?.signal?.throwIfAborted();
 		}
+		options?.signal?.throwIfAborted();
 	}
 
 	/**

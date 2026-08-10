@@ -412,10 +412,10 @@ export interface ExtensionModelQuery {
 	 */
 	family(model: Model): string;
 	/**
-	 * Resolve a selector completely, including exact thinking effort, a live
-	 * credential check, and the catalog-owned stable vendor identity.
+	 * Resolve a selector after discovery refresh, including exact effort,
+	 * live authentication, and stable catalog vendor identity.
 	 */
-	resolveSelection(spec: string): Promise<ExtensionResolvedModelSelection | undefined>;
+	resolveSelection(spec: string, signal?: AbortSignal): Promise<ExtensionResolvedModelSelection | undefined>;
 }
 
 /** Canonical model selection resolved through the live registry and credential store. */
@@ -449,17 +449,35 @@ export interface TaskRouterContext {
 	settings: ExtensionSettingsQuery;
 }
 
+export interface TaskRouterRoutingContext {
+	/**
+	 * Existing model-authored batch context. Routers may inspect it for routing,
+	 * but adapters must exclude it from task classification.
+	 */
+	sharedContext?: string;
+}
+
 export interface TaskRouterItem {
-	index: number;
-	agent: string;
-	task: string;
-	reviewOfRouteId?: string;
+	readonly index: number;
+	readonly agent: string;
+	readonly task: string;
+	readonly reviewOfRouteId?: string;
+	readonly routingContext: TaskRouterRoutingContext;
 }
 
 export interface TaskRouterRequest {
-	taskCwd: string;
-	items: readonly TaskRouterItem[];
+	readonly taskCwd: string;
+	readonly invocationKind: "flat" | "batch";
+	readonly items: readonly TaskRouterItem[];
 }
+
+export type ExtensionDeepReadonly<T> = T extends (...args: never[]) => unknown
+	? T
+	: T extends readonly (infer TItem)[]
+		? readonly ExtensionDeepReadonly<TItem>[]
+		: T extends object
+			? { readonly [TKey in keyof T]: ExtensionDeepReadonly<T[TKey]> }
+			: T;
 
 export interface TaskRouteSelection extends ExtensionResolvedModelSelection {
 	selector: string;
@@ -481,7 +499,7 @@ export interface TaskRouterRegistration {
 	id: string;
 	apiVersion: 1;
 	route(
-		request: Readonly<TaskRouterRequest>,
+		request: ExtensionDeepReadonly<TaskRouterRequest>,
 		context: TaskRouterContext,
 	): Promise<TaskRouterBatchDecision | null> | TaskRouterBatchDecision | null;
 	onStarted?(event: unknown, context: TaskRouterContext): void | Promise<void>;

@@ -59,6 +59,12 @@ installLegacyPiSpecifierShim();
 type HandlerFn = (...args: unknown[]) => Promise<unknown>;
 type LoadedExtensionModule = ExtensionFactory | { default?: ExtensionFactory };
 
+function deepFreeze<T>(value: T): T {
+	if (value === null || typeof value !== "object" || Object.isFrozen(value)) return value;
+	for (const nested of Object.values(value)) deepFreeze(nested);
+	return Object.freeze(value);
+}
+
 function getExtensionFactory(module: LoadedExtensionModule): ExtensionFactory | null {
 	const candidate = typeof module === "function" ? module : module.default;
 	return typeof candidate === "function" ? candidate : null;
@@ -188,7 +194,11 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 				`Task router "${router.id}" API version ${router.apiVersion} does not match package requirement ${String(requiredVersion)}`,
 			);
 		}
-		this.extension.taskRouter = { registration: router, source: this.extension.source };
+		const registration: TaskRouterRegistration = {
+			...router,
+			route: (request, context) => router.route(deepFreeze(request), context),
+		};
+		this.extension.taskRouter = { registration, source: this.extension.source };
 	}
 
 	on<F extends HandlerFn>(event: string, handler: F): void {

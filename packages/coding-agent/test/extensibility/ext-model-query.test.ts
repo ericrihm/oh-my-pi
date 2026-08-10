@@ -61,6 +61,8 @@ function registry(
 		getAll: () => configured,
 		// Configuration and credential health are deliberately independent.
 		getAvailable: () => configured,
+		awaitBackgroundRefresh: async () => {},
+		refreshProvider: async () => {},
 		getApiKey: async (entry: Model<Api>) => {
 			credentialChecks.push(entry.provider);
 			return authenticatedProviders.has(entry.provider) ? "working-key" : undefined;
@@ -170,5 +172,93 @@ describe("createExtensionModelQuery", () => {
 
 		expect(credentialChecks).toEqual(["together"]);
 		expect(selection).toMatchObject({ model: qwen, authenticated: false, vendorId: "alibaba" });
+	});
+
+	test("resolveSelection() waits for discovery and returns only the post-refresh selection", async () => {
+		const stale = model("claude-opus-4-8", "Stale Claude", "anthropic");
+		const fresh = model("claude-opus-4-8", "Fresh Claude", "anthropic");
+		let available: Model<Api>[] = [];
+		let backgroundSettled = false;
+		const calls: string[] = [];
+		const modelRegistry = {
+			getAvailable: () => {
+				calls.push(`available:${backgroundSettled ? "settled" : "pending"}`);
+				return available;
+			},
+			awaitBackgroundRefresh: async () => {
+				calls.push("await-background");
+				await Promise.resolve();
+				backgroundSettled = true;
+				available = [stale];
+			},
+			refreshProvider: async () => {
+				calls.push("refresh-provider");
+				available = [fresh];
+			},
+			getApiKey: async (entry: Model<Api>) => {
+				calls.push(`auth:${entry.name}`);
+				return "working-key";
+			},
+		} as unknown as ModelRegistry;
+		const q = createExtensionModelQuery(modelRegistry, undefined, () => undefined);
+
+		const selection = await q.resolveSelection("anthropic/claude-opus-4-8");
+
+		expect(selection?.model).toBe(fresh);
+		expect(calls).toEqual([
+			"await-background",
+			"available:settled",
+			"refresh-provider",
+			"available:settled",
+			"auth:Fresh Claude",
+		]);
+	});
+
+	test("resolveSelection() passes cancellation through refresh and credential resolution", async () => {
+		const controller = new AbortController();
+		const observedSignals: AbortSignal[] = [];
+		const modelRegistry = {
+			getAvailable: () => [claude],
+			awaitBackgroundRefresh: async (options?: { signal?: AbortSignal }) => {
+				if (options?.signal) observedSignals.push(options.signal);
+			},
+			refreshProvider: async (_provider: string, _strategy: string, options?: { signal?: AbortSignal }) => {
+				if (options?.signal) observedSignals.push(options.signal);
+			},
+			getApiKey: async (_entry: Model<Api>, _sessionId?: string, options?: { signal?: AbortSignal }) => {
+				if (options?.signal) observedSignals.push(options.signal);
+				return "working-key";
+			},
+		} as unknown as ModelRegistry;
+		const q = createExtensionModelQuery(modelRegistry, undefined, () => undefined);
+
+		await q.resolveSelection("anthropic/claude-opus-4-8", controller.signal);
+
+		expect(observedSignals).toEqual([controller.signal, controller.signal, controller.signal]);
+	});
+
+	test("resolveSelection() aborts during refresh without probing credentials", async () => {
+		const controller = new AbortController();
+		let credentialChecks = 0;
+		const modelRegistry = {
+			getAvailable: () => [claude],
+			awaitBackgroundRefresh: async () => {},
+			refreshProvider: async (_provider: string, _strategy: string, options?: { signal?: AbortSignal }) => {
+				await new Promise<void>((_resolve, reject) => {
+					options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
+					controller.abort(new DOMException("Route cancelled", "AbortError"));
+				});
+			},
+			getApiKey: async () => {
+				credentialChecks++;
+				return "working-key";
+			},
+		} as unknown as ModelRegistry;
+		const q = createExtensionModelQuery(modelRegistry, undefined, () => undefined);
+
+		await expect(q.resolveSelection("anthropic/claude-opus-4-8", controller.signal)).rejects.toMatchObject({
+			name: "AbortError",
+		});
+		expect(credentialChecks).toBe(0);
 	});
 });

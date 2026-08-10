@@ -34,11 +34,20 @@ export function createExtensionModelQuery(
 		// priority list and tries each pattern — the same path core selection uses.
 		resolve: (spec: string): Model<Api> | undefined => resolve(spec).model,
 		family: (model: Model<Api>): string => modelFamilyToken(model.id) || model.provider.toLowerCase(),
-		resolveSelection: async spec => {
+		resolveSelection: async (spec, signal) => {
+			await modelRegistry.awaitBackgroundRefresh({ signal });
+			signal?.throwIfAborted();
+			const beforeRefresh = resolve(spec);
+			if (!beforeRefresh.model) return undefined;
+			await modelRegistry.refreshProvider(beforeRefresh.model.provider, "online-if-uncached", { signal });
+			signal?.throwIfAborted();
 			const resolved = resolve(spec);
 			if (!resolved.model) return undefined;
 			const model = resolved.model;
-			const apiKey = await modelRegistry.getApiKey(model);
+			const vendorId = stableModelVendorId(model.id, model.provider);
+			if (vendorId === null) return undefined;
+			const apiKey = await modelRegistry.getApiKey(model, undefined, { signal });
+			signal?.throwIfAborted();
 			return {
 				model,
 				provider: model.provider,
@@ -47,7 +56,7 @@ export function createExtensionModelQuery(
 					? { thinkingLevel: resolved.thinkingLevel }
 					: {}),
 				authenticated: apiKey !== undefined,
-				vendorId: stableModelVendorId(model.id, model.provider),
+				vendorId,
 			};
 		},
 	};

@@ -13,6 +13,7 @@ import {
 	isReasoningGlmModelId,
 	modelFamilyToken,
 	parseAnthropicModel,
+	stableModelVendorId,
 	supportsAdaptiveThinkingDisplay,
 	supportsMidConversationSystemMessages,
 } from "@oh-my-pi/pi-catalog/identity";
@@ -278,6 +279,27 @@ describe("modelFamilyToken", () => {
 
 	test("returns an empty token for unclassifiable ids so callers fall back to provider", () => {
 		expect(modelFamilyToken("some-unknown-model")).toBe("");
+	});
+});
+
+describe("stableModelVendorId", () => {
+	test("canonicalizes known model lines through proxy providers", () => {
+		expect(stableModelVendorId("moonshotai/kimi-k3", "openrouter")).toBe("moonshot");
+		expect(stableModelVendorId("qwen/qwen3.6-27b", "together")).toBe("alibaba");
+		expect(stableModelVendorId("xiaomi/mimo-v2-flash", "openrouter")).toBe("xiaomi");
+		expect(stableModelVendorId("zai-org/glm-5.2", "cerebras")).toBe("zhipu");
+	});
+
+	test("canonicalizes native provider aliases without exposing model-line tokens", () => {
+		expect(stableModelVendorId("opaque-id", "kimi-code")).toBe("moonshot");
+		expect(stableModelVendorId("opaque-id", "alibaba-token-plan")).toBe("alibaba");
+		expect(stableModelVendorId("opaque-id", "xiaomi-token-plan-cn")).toBe("xiaomi");
+		expect(stableModelVendorId("opaque-id", "zai")).toBe("zhipu");
+		expect(stableModelVendorId("opaque-id", "zhipu-coding-plan")).toBe("zhipu");
+	});
+
+	test("refuses unknown identity instead of persisting family or provider guesses", () => {
+		expect(stableModelVendorId("some-unknown-model", "custom-proxy")).toBeNull();
 	});
 });
 

@@ -281,6 +281,47 @@ describe("extension source authority", () => {
 			),
 		).rejects.toThrow(/conflicts with already registered router/i);
 	});
+	it("deep-freezes the complete v1 request before invoking the router", async () => {
+		let mutationSucceeded = false;
+		const extension = await loadExtensionFromFactory(
+			pi => {
+				pi.registerTaskRouter({
+					id: "immutable-request",
+					apiVersion: 1,
+					route: request => {
+						expect(request.invocationKind).toBe("batch");
+						expect(request.items[0]?.routingContext.sharedContext).toBe("Shared repository context.");
+						expect(Object.isFrozen(request)).toBe(true);
+						expect(Object.isFrozen(request.items)).toBe(true);
+						expect(Object.isFrozen(request.items[0])).toBe(true);
+						expect(Object.isFrozen(request.items[0]?.routingContext)).toBe(true);
+						mutationSucceeded = Reflect.set(request.items[0] as object, "task", "Mutated");
+						return null;
+					},
+				});
+			},
+			cwd,
+			new EventBus(),
+			new ExtensionRuntime(),
+		);
+		const request = {
+			taskCwd: cwd,
+			invocationKind: "batch",
+			items: [
+				{
+					index: 0,
+					agent: "task",
+					task: "Original",
+					routingContext: { sharedContext: "Shared repository context." },
+				},
+			],
+		} as const;
+
+		await extension.taskRouter?.registration.route(request, {} as never);
+
+		expect(mutationSucceeded).toBe(false);
+		expect(request.items[0].task).toBe("Original");
+	});
 	it("keeps standalone configured files outside package authority", async () => {
 		const discovered: unknown = await discoverExtensionSources([standaloneEntry], cwd, undefined, { ambient: false });
 		if (!Array.isArray(discovered)) throw new Error("expected extension source descriptors");

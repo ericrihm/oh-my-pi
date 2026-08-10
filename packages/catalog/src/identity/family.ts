@@ -271,19 +271,49 @@ export const modelFamilyToken = memo((modelId: string): string => {
 	return "";
 });
 
+/** Catalog-owned persistent vendor vocabulary for known model lines. */
+const MODEL_LINE_VENDOR_IDS: Readonly<Record<string, string>> = {
+	anthropic: "anthropic",
+	deepseek: "deepseek",
+	gemma: "google",
+	gemini: "google",
+	glm: "zhipu",
+	"gpt-oss": "openai",
+	kimi: "moonshot",
+	minimax: "minimax",
+	mimo: "xiaomi",
+	openai: "openai",
+	qwen: "alibaba",
+};
+
+const PROVIDER_VENDOR_IDS: Readonly<Record<string, string>> = {
+	anthropic: "anthropic",
+	deepseek: "deepseek",
+	"google-antigravity": "google",
+	"google-gemini-cli": "google",
+	google: "google",
+	"kimi-code": "moonshot",
+	minimax: "minimax",
+	moonshot: "moonshot",
+	openai: "openai",
+	"qwen-portal": "alibaba",
+	xiaomi: "xiaomi",
+	zai: "zhipu",
+	"zhipu-coding-plan": "zhipu",
+};
+
 /**
  * Stable catalog-owned vendor identity for persistence and policy matching.
- * Unlike {@link modelFamilyToken}, this vocabulary does not expose model-line
- * names such as `kimi` or `qwen`, and it follows the upstream vendor through
- * proxy providers.
+ * Returns `null` when neither the model line nor provider has known ownership;
+ * callers must refuse rather than persist opaque family/provider guesses.
  */
-export function stableModelVendorId(modelId: string, provider: string): string {
-	const family = modelFamilyToken(modelId);
-	if (family === "kimi") return "moonshot";
-	if (family === "qwen") return "alibaba";
-	if (family === "gemma" || family === "gemini") return "google";
-	if (family === "anthropic" || family === "openai" || family === "deepseek") return family;
-	return family || provider.toLowerCase();
+export function stableModelVendorId(modelId: string, provider: string): string | null {
+	const familyVendor = MODEL_LINE_VENDOR_IDS[modelFamilyToken(modelId)];
+	if (familyVendor) return familyVendor;
+	const normalizedProvider = provider.toLowerCase();
+	if (normalizedProvider.startsWith("alibaba-")) return "alibaba";
+	if (normalizedProvider.startsWith("xiaomi-token-plan-")) return "xiaomi";
+	return PROVIDER_VENDOR_IDS[normalizedProvider] ?? null;
 }
 
 /**
