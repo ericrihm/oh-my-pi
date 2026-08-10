@@ -525,10 +525,26 @@ describe("task router SDK bridge", () => {
 		].join("\n");
 		expect(Buffer.byteLength(writerOutput)).toBeGreaterThan(500_000);
 
-		globalThis.__ompTaskRouterProbe = newProbe("complete");
-		const extensionPath = await writeRouter("raw-finalization-probe");
-		const { tool } = await createSession([extensionPath], { "async.enabled": false });
+		const { tool } = await createSession([], { "async.enabled": false });
 		vi.restoreAllMocks();
+		const seededRouteDecisions: Array<{ index: number; route: { router: string; routeId: string } }> = [];
+		const executeWithPhase1RouteStub = (
+			toolCallId: string,
+			params: { agent: string; task: string; reviewOfRouteId?: string },
+		) => {
+			getProbe().requests.push({
+				taskCwd: tempDir,
+				items: [{ index: 0, ...params }],
+			});
+			seededRouteDecisions.push({
+				index: 0,
+				route: {
+					router: "regulus",
+					routeId: params.reviewOfRouteId === undefined ? "route-0" : "review-0",
+				},
+			});
+			return tool.execute(toolCallId, params as never);
+		};
 
 		const childPrompts: string[] = [];
 		let childIndex = 0;
@@ -544,7 +560,10 @@ describe("task router SDK bridge", () => {
 			} as CreateAgentSessionResult;
 		});
 
-		const writerCall = await tool.execute("oversized-writer", { agent: "task", task: assignment } as never);
+		const writerCall = await executeWithPhase1RouteStub("oversized-writer", {
+			agent: "task",
+			task: assignment,
+		});
 		const writerResults = readField(readField(writerCall, "details"), "results");
 		expect(writerResults).toBeArray();
 		const writerResult = Array.isArray(writerResults) ? writerResults[0] : undefined;
@@ -558,17 +577,24 @@ describe("task router SDK bridge", () => {
 		expect(modelPreview).not.toContain("WRITER_HEAD_MUST_SURVIVE_IN_RECEIPT");
 		expect(modelPreview).not.toContain("SYSTEM WARNING: Subagent called yield with null data.");
 
-		await tool.execute("oversized-reviewer", {
+		await executeWithPhase1RouteStub("oversized-reviewer", {
 			agent: "scout",
 			task: "Review the trusted oversized writer result.",
 			reviewOfRouteId: "route-0",
-		} as never);
+		});
 
 		expect(childPrompts).toHaveLength(2);
 		const trustedFrame = childPrompts[1] ?? "";
 		const assignmentHash = new Bun.CryptoHasher("sha256").update(assignment).digest("hex");
 		const outputHash = new Bun.CryptoHasher("sha256").update(writerOutput).digest("hex");
-		expect(getProbe().requests[1]?.items?.[0]).toMatchObject({
+		expect(getProbe().requests).toHaveLength(2);
+		expect(seededRouteDecisions).toEqual([
+			{ index: 0, route: { router: "regulus", routeId: "route-0" } },
+			{ index: 0, route: { router: "regulus", routeId: "review-0" } },
+		]);
+		const reviewRequest = getProbe().requests[1]?.items?.[0];
+		expect(reviewRequest).toBeDefined();
+		expect(reviewRequest).toMatchObject({
 			reviewOfRouteId: "route-0",
 			reviewTarget: {
 				status: "completed",
