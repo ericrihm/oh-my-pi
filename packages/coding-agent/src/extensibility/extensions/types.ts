@@ -68,6 +68,7 @@ import type {
 } from "../../tools";
 import type { ApprovalMode } from "../../tools/approval";
 import type { EventBus } from "../../utils/event-bus";
+import type { PluginManifest } from "../plugins/types";
 import type {
 	AgentEndEvent,
 	AgentStartEvent,
@@ -410,6 +411,86 @@ export interface ExtensionModelQuery {
 	 * identity. Compare it; do not persist it (the vocabulary tracks new releases).
 	 */
 	family(model: Model): string;
+	/**
+	 * Resolve a selector completely, including exact thinking effort, a live
+	 * credential check, and the catalog-owned stable vendor identity.
+	 */
+	resolveSelection(spec: string): Promise<ExtensionResolvedModelSelection | undefined>;
+}
+
+/** Canonical model selection resolved through the live registry and credential store. */
+export interface ExtensionResolvedModelSelection {
+	model: Model;
+	provider: string;
+	id: string;
+	thinkingLevel?: ThinkingLevel;
+	authenticated: boolean;
+	vendorId: string;
+}
+
+export interface ExtensionSourceDescriptor {
+	resolvedPath: string;
+	sourceKind: "packaged" | "standalone";
+	loadKind: "explicit" | "configured" | "discovered";
+	packageRoot?: string;
+	packageName?: string;
+	packageVersion?: string;
+	manifest?: PluginManifest;
+}
+
+export interface ExtensionSettingsQuery {
+	get(key: string): unknown;
+}
+
+export interface TaskRouterContext {
+	signal: AbortSignal;
+	models: ExtensionModelQuery;
+	source: ExtensionSourceDescriptor;
+	settings: ExtensionSettingsQuery;
+}
+
+export interface TaskRouterItem {
+	index: number;
+	agent: string;
+	task: string;
+	reviewOfRouteId?: string;
+}
+
+export interface TaskRouterRequest {
+	taskCwd: string;
+	items: readonly TaskRouterItem[];
+}
+
+export interface TaskRouteSelection extends ExtensionResolvedModelSelection {
+	selector: string;
+	effort: ThinkingLevel;
+}
+
+export interface TaskRouteDecision {
+	index: number;
+	strictRoute: true;
+	selection: TaskRouteSelection;
+	route: Readonly<Record<string, unknown>>;
+}
+
+export interface TaskRouterBatchDecision {
+	decisions: readonly TaskRouteDecision[];
+}
+
+export interface TaskRouterRegistration {
+	id: string;
+	apiVersion: 1;
+	route(
+		request: Readonly<TaskRouterRequest>,
+		context: TaskRouterContext,
+	): Promise<TaskRouterBatchDecision | null> | TaskRouterBatchDecision | null;
+	onStarted?(event: unknown, context: TaskRouterContext): void | Promise<void>;
+	onSettled?(event: unknown, context: TaskRouterContext): void | Promise<void>;
+}
+
+export interface RegisteredTaskRouter {
+	registration: TaskRouterRegistration;
+	source: ExtensionSourceDescriptor;
 }
 
 export interface ExtensionContext {
@@ -1218,6 +1299,9 @@ export interface ExtensionAPI {
 	/** Register a tool that the LLM can call. */
 	registerTool<TParams extends TSchema = TSchema, TDetails = unknown>(tool: ToolDefinition<TParams, TDetails>): void;
 
+	/** Register this package's exclusive task router. */
+	registerTaskRouter(router: TaskRouterRegistration): void;
+
 	// =========================================================================
 	// Command, Shortcut, Flag Registration
 	// =========================================================================
@@ -1594,6 +1678,8 @@ export interface Extension {
 	commands: Map<string, RegisteredCommand>;
 	flags: Map<string, ExtensionFlag>;
 	shortcuts: Map<KeyId, ExtensionShortcut>;
+	taskRouter?: RegisteredTaskRouter;
+	source: ExtensionSourceDescriptor;
 }
 
 /** Result of loading extensions. */
@@ -1601,6 +1687,8 @@ export interface LoadExtensionsResult {
 	extensions: Extension[];
 	errors: Array<{ path: string; error: string }>;
 	runtime: ExtensionRuntime;
+	taskRouter?: RegisteredTaskRouter;
+	sources: ExtensionSourceDescriptor[];
 }
 
 // ============================================================================

@@ -4,8 +4,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { injectPluginDirRoots } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
-import { discoverExtensionPaths } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import {
+	clearOmpExtensionCliRoots,
+	injectOmpExtensionCliRoots,
+} from "@oh-my-pi/pi-coding-agent/discovery/omp-extension-roots";
+import {
+	discoverExtensionSources,
+	ExtensionRuntime,
+	type ExtensionSourceDescriptor,
+	loadExtensionFromFactory,
+} from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { PluginManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/manager";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -16,6 +24,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition, SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { getAgentDir, getPluginsLockfile, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 
 interface SourceProbe {
@@ -43,16 +52,16 @@ const restrictedAgent: AgentDefinition = {
 	tools: ["read"],
 };
 
-function requireDescriptor(value: unknown): object {
+function requireDescriptor(value: unknown): Record<string, unknown> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		throw new Error(`expected an extension source descriptor, got ${String(value)}`);
 	}
-	return value;
+	return value as Record<string, unknown>;
 }
 
 function readField(value: unknown, key: string): unknown {
 	if (!value || typeof value !== "object" || !(key in value)) return undefined;
-	return value[key];
+	return (value as Record<string, unknown>)[key];
 }
 
 function firstText(result: { content: Array<{ type: string; text?: string }> }): string {
@@ -172,25 +181,22 @@ describe("extension source authority", () => {
 	});
 
 	afterAll(async () => {
-		await injectPluginDirRoots(tempHome, [], cwd);
+		clearOmpExtensionCliRoots();
 		authStorage.close();
 		delete globalThis.__ompSourceAuthorityProbe;
 		setAgentDir(originalAgentDir);
 		await removeWithRetries(tempHome);
 	});
 
-	async function discoverPackagedSource(): Promise<object> {
-		await injectPluginDirRoots(tempHome, [pluginRoot], cwd);
-		const discovered: unknown = await discoverExtensionPaths([], cwd, undefined, { ambient: true });
-		if (!Array.isArray(discovered)) throw new Error("expected extension source descriptors");
-		const packaged = discovered
-			.map(requireDescriptor)
-			.find(source => "resolvedPath" in source && source.resolvedPath === packagedEntry);
+	async function discoverPackagedSource(): Promise<ExtensionSourceDescriptor> {
+		injectOmpExtensionCliRoots([pluginRoot], tempHome, cwd, { replace: true });
+		const discovered = await discoverExtensionSources([], cwd, undefined, { ambient: true });
+		const packaged = discovered.find(source => source.resolvedPath === packagedEntry);
 		if (!packaged) throw new Error("packaged extension source was not discovered");
 		return packaged;
 	}
 
-	async function createSessionFromSources(sources: object[], parentTaskPrefix?: string) {
+	async function createSessionFromSources(sources: ExtensionSourceDescriptor[], parentTaskPrefix?: string) {
 		const options = {
 			cwd,
 			agentDir: getAgentDir(),
@@ -255,15 +261,28 @@ describe("extension source authority", () => {
 				},
 			}),
 		);
-		await injectPluginDirRoots(tempHome, [invalidRoot], cwd);
+		injectOmpExtensionCliRoots([invalidRoot], tempHome, cwd, { replace: true });
 
-		await expect(discoverExtensionPaths([], cwd, undefined, { ambient: true })).rejects.toThrow(
+		await expect(discoverExtensionSources([], cwd, undefined, { ambient: true })).rejects.toThrow(
 			/invalid-source-probe.*routingMode|routingMode.*type.*enum/i,
 		);
 	});
-
+	it("enforces exclusive router registration within one extension", async () => {
+		await expect(
+			loadExtensionFromFactory(
+				pi => {
+					const router = { id: "duplicate", apiVersion: 1 as const, route: async () => null };
+					pi.registerTaskRouter(router);
+					pi.registerTaskRouter(router);
+				},
+				cwd,
+				new EventBus(),
+				new ExtensionRuntime(),
+			),
+		).rejects.toThrow(/conflicts with already registered router/i);
+	});
 	it("keeps standalone configured files outside package authority", async () => {
-		const discovered: unknown = await discoverExtensionPaths([standaloneEntry], cwd, undefined, { ambient: false });
+		const discovered: unknown = await discoverExtensionSources([standaloneEntry], cwd, undefined, { ambient: false });
 		if (!Array.isArray(discovered)) throw new Error("expected extension source descriptors");
 		const standalone = requireDescriptor(discovered[0]);
 
@@ -345,10 +364,10 @@ describe("extension source authority", () => {
 	});
 
 	it("checks linked enablement and settings freshly on every routed task", async () => {
-		const packaged = await discoverPackagedSource();
+		const [packaged] = await discoverExtensionSources([pluginRoot], cwd, undefined, { ambient: false });
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			globalThis.__ompSourceAuthorityProbe?.executions.push(options);
-			return completedResult(options.index ?? 0, options.assignment);
+			return completedResult(options.index ?? 0, options.assignment ?? "");
 		});
 		const { tool } = await createSessionFromSources([packaged]);
 		await tool.execute("explicit", { agent: "task", task: "Explicit load." } as never);

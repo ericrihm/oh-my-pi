@@ -55,7 +55,7 @@ interface RouterProbe {
 }
 
 declare global {
-	var __ompTaskRouterProbe: RouterProbe | undefined;
+	var __ompTaskRouterPhase2Probe: RouterProbe | undefined;
 }
 
 const taskAgent: AgentDefinition = {
@@ -95,8 +95,8 @@ function newProbe(mode: RouterMode = "null"): RouterProbe {
 }
 
 function getProbe(): RouterProbe {
-	if (!globalThis.__ompTaskRouterProbe) throw new Error("router probe was not initialized");
-	return globalThis.__ompTaskRouterProbe;
+	if (!globalThis.__ompTaskRouterPhase2Probe) throw new Error("router probe was not initialized");
+	return globalThis.__ompTaskRouterPhase2Probe;
 }
 
 function firstText(result: { content: Array<{ type: string; text?: string }> }): string {
@@ -145,8 +145,8 @@ function yieldingExecutorSession(output: string, prompts: string[]): AgentSessio
 				if (index >= 0) listeners.splice(index, 1);
 			};
 		},
-		prompt: async prompt => {
-			prompts.push(String(prompt));
+		prompt: async (promptValue: unknown) => {
+			prompts.push(String(promptValue));
 			emit({
 				type: "message_update",
 				message: assistant,
@@ -180,7 +180,7 @@ function yieldingExecutorSession(output: string, prompts: string[]): AgentSessio
 
 function readField(value: unknown, key: string): unknown {
 	if (!value || typeof value !== "object" || !(key in value)) return undefined;
-	return value[key];
+	return (value as Record<string, unknown>)[key];
 }
 
 describe("task router SDK bridge", () => {
@@ -198,7 +198,7 @@ describe("task router SDK bridge", () => {
 	});
 
 	beforeEach(() => {
-		globalThis.__ompTaskRouterProbe = newProbe();
+		globalThis.__ompTaskRouterPhase2Probe = newProbe();
 		AgentRegistry.resetGlobalForTests();
 		AgentLifecycleManager.resetGlobalForTests();
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
@@ -207,7 +207,7 @@ describe("task router SDK bridge", () => {
 		});
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			getProbe().executions.push(options);
-			return resultFor(options.index ?? 0, options.agent.name, options.assignment);
+			return resultFor(options.index ?? 0, options.agent.name, options.assignment ?? "");
 		});
 	});
 
@@ -221,7 +221,7 @@ describe("task router SDK bridge", () => {
 
 	afterAll(async () => {
 		authStorage.close();
-		delete globalThis.__ompTaskRouterProbe;
+		delete globalThis.__ompTaskRouterPhase2Probe;
 		await removeWithRetries(tempDir);
 	});
 
@@ -231,7 +231,7 @@ describe("task router SDK bridge", () => {
 			extensionPath,
 			[
 				"export default function (pi) {",
-				"  const probe = globalThis.__ompTaskRouterProbe;",
+				"  const probe = globalThis.__ompTaskRouterPhase2Probe;",
 				"  probe.registrations += 1;",
 				"  pi.registerTaskRouter({",
 				`    id: ${JSON.stringify(id)},`,
@@ -333,7 +333,7 @@ describe("task router SDK bridge", () => {
 	}
 
 	it("revalidates a sealed strict selection and executes with exact model, effort, and no prewalk", async () => {
-		globalThis.__ompTaskRouterProbe = newProbe("complete");
+		globalThis.__ompTaskRouterPhase2Probe = newProbe("complete");
 		const extensionPath = await writeRouter("strict-success-probe");
 		const { session, tool } = await createSession([extensionPath]);
 
@@ -362,7 +362,7 @@ describe("task router SDK bridge", () => {
 		["vendor-mismatch", {}],
 		["max-effort", { "task.maxEffort": "low" }],
 	] as const)("fails closed on strict %s before IDs, jobs, lifecycle, or execution", async (mode, settings) => {
-		globalThis.__ompTaskRouterProbe = newProbe(mode);
+		globalThis.__ompTaskRouterPhase2Probe = newProbe(mode);
 		const extensionPath = await writeRouter(`${mode}-probe`);
 		const { session, tool } = await createSession([extensionPath], settings);
 		const allocate = vi.spyOn(AgentOutputManager.prototype, "allocate");
@@ -381,7 +381,7 @@ describe("task router SDK bridge", () => {
 	});
 
 	it("rechecks live authentication during strict preflight and fails atomically when it expired", async () => {
-		globalThis.__ompTaskRouterProbe = newProbe("complete");
+		globalThis.__ompTaskRouterPhase2Probe = newProbe("complete");
 		const extensionPath = await writeRouter("expired-auth-probe");
 		const { session, tool } = await createSession([extensionPath]);
 		const allocate = vi.spyOn(AgentOutputManager.prototype, "allocate");
@@ -402,7 +402,7 @@ describe("task router SDK bridge", () => {
 	});
 
 	it("registers async work before awaiting onStarted and gates child execution until it resolves", async () => {
-		globalThis.__ompTaskRouterProbe = newProbe("delay-start");
+		globalThis.__ompTaskRouterPhase2Probe = newProbe("delay-start");
 		const extensionPath = await writeRouter("delayed-start-probe");
 		const { session, tool } = await createSession([extensionPath]);
 		const registerJob = vi.spyOn(AsyncJobManager.prototype, "register");
@@ -431,7 +431,7 @@ describe("task router SDK bridge", () => {
 	});
 
 	it("contains onStarted failure, starts no child, and settles the route exactly once", async () => {
-		globalThis.__ompTaskRouterProbe = newProbe("reject-start");
+		globalThis.__ompTaskRouterPhase2Probe = newProbe("reject-start");
 		const extensionPath = await writeRouter("rejected-start-probe");
 		const { session, tool } = await createSession([extensionPath]);
 
@@ -447,7 +447,7 @@ describe("task router SDK bridge", () => {
 	});
 
 	it("contains onSettled failure without rewriting the completed task result or settling twice", async () => {
-		globalThis.__ompTaskRouterProbe = newProbe("reject-settle");
+		globalThis.__ompTaskRouterPhase2Probe = newProbe("reject-settle");
 		const extensionPath = await writeRouter("rejected-settle-probe");
 		const { session, tool } = await createSession([extensionPath]);
 
@@ -463,7 +463,7 @@ describe("task router SDK bridge", () => {
 	});
 
 	it("stores a completed writer receipt and injects its exact bytes through one trusted review frame", async () => {
-		globalThis.__ompTaskRouterProbe = newProbe("complete");
+		globalThis.__ompTaskRouterPhase2Probe = newProbe("complete");
 		const extensionPath = await writeRouter("review-frame-probe");
 		const { session, tool } = await createSession([extensionPath]);
 
@@ -557,7 +557,7 @@ describe("task router SDK bridge", () => {
 				session: yieldingExecutorSession(output, childPrompts),
 				extensionsResult: {},
 				setToolUIContext: () => {},
-			} as CreateAgentSessionResult;
+			} as unknown as CreateAgentSessionResult;
 		});
 
 		const writerCall = await executeWithPhase1RouteStub("oversized-writer", {

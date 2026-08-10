@@ -23,6 +23,7 @@ import { type Hook, hookCapability } from "../../capability/hook";
 import { isServiceTierFamily, isServiceTierForFamily } from "../../config/service-tier";
 import { loadCapability } from "../../discovery";
 import { getExtensionNameFromPath } from "../../discovery/helpers";
+import { getInjectedOmpExtensionCliRoots } from "../../discovery/omp-extension-roots";
 import type { ExecOptions } from "../../exec/exec";
 import { execCommand } from "../../exec/exec";
 // Runtime self-reference: dereference this namespace only inside loader functions to keep the index.ts cycle safe.
@@ -32,6 +33,7 @@ import { EventBus } from "../../utils/event-bus";
 import * as TypeBox from "../legacy-typebox";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "../plugins/legacy-pi-compat";
 import { getAllPluginExtensionPaths } from "../plugins/loader";
+import type { PluginManifest, PluginSettingSchema } from "../plugins/types";
 
 import { resolvePath, withHostGuard } from "../utils";
 import type {
@@ -40,11 +42,14 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 	ExtensionFactory,
+	ExtensionSourceDescriptor,
 	ExtensionRuntime as IExtensionRuntime,
 	LoadExtensionsResult,
 	MessageRenderer,
 	ProviderConfig,
 	RegisteredCommand,
+	RegisteredTaskRouter,
+	TaskRouterRegistration,
 	ToolDefinition,
 	ToolInfo,
 } from "./types";
@@ -167,6 +172,24 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 		private readonly cwd: string,
 		public readonly events: EventBus,
 	) {}
+
+	registerTaskRouter(router: TaskRouterRegistration): void {
+		if (this.extension.taskRouter) {
+			throw new Error(
+				`Task router "${router.id}" conflicts with already registered router "${this.extension.taskRouter.registration.id}"`,
+			);
+		}
+		if (router.apiVersion !== 1) {
+			throw new Error(`Task router "${router.id}" requires unsupported API version ${String(router.apiVersion)}`);
+		}
+		const requiredVersion = this.extension.source.manifest?.taskRouterApiVersion;
+		if (this.extension.source.sourceKind === "packaged" && requiredVersion !== router.apiVersion) {
+			throw new Error(
+				`Task router "${router.id}" API version ${router.apiVersion} does not match package requirement ${String(requiredVersion)}`,
+			);
+		}
+		this.extension.taskRouter = { registration: router, source: this.extension.source };
+	}
 
 	on<F extends HandlerFn>(event: string, handler: F): void {
 		const list = this.extension.handlers.get(event) ?? [];
@@ -310,10 +333,11 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 /**
  * Create an Extension object with empty collections.
  */
-function createExtension(extensionPath: string, resolvedPath: string): Extension {
+function createExtension(extensionPath: string, resolvedPath: string, source: ExtensionSourceDescriptor): Extension {
 	return {
 		path: extensionPath,
 		resolvedPath,
+		source,
 		handlers: new Map(),
 		tools: new Map(),
 		assistantThinkingRenderers: [],
@@ -376,18 +400,19 @@ async function importExtensionModule(extensionPath: string, cwd: string): Promis
 }
 
 async function bindExtension(
-	extensionPath: string,
+	source: ExtensionSourceDescriptor,
 	imported: ImportedExtensionModule,
 	cwd: string,
 	eventBus: EventBus,
 	runtime: IExtensionRuntime,
 ): Promise<{ extension: Extension | null; error: string | null }> {
+	const extensionPath = source.resolvedPath;
 	const factory = imported.factory;
 	if (imported.error !== null || factory === null) {
 		return { extension: null, error: imported.error };
 	}
 	try {
-		const extension = createExtension(extensionPath, imported.resolvedPath);
+		const extension = createExtension(extensionPath, imported.resolvedPath, source);
 		const api = new ConcreteExtensionAPI(PiCodingAgent, extension, runtime, cwd, eventBus);
 		await withHostGuard(() => runExtensionFactory(factory, api, runtime));
 
@@ -408,7 +433,8 @@ export async function loadExtensionFromFactory(
 	runtime: IExtensionRuntime,
 	name = "<inline>",
 ): Promise<Extension> {
-	const extension = createExtension(name, name);
+	const source: ExtensionSourceDescriptor = { resolvedPath: name, sourceKind: "standalone", loadKind: "configured" };
+	const extension = createExtension(name, name, source);
 	const api = new ConcreteExtensionAPI(PiCodingAgent, extension, runtime, cwd, eventBus);
 	await runExtensionFactory(factory, api, runtime);
 	return extension;
@@ -422,56 +448,76 @@ export async function loadExtensionFromFactory(
  * sequentially in the original path order, so registration semantics
  * (last-wins collisions, shared runtime flag defaults) stay deterministic.
  */
-export async function loadExtensions(paths: string[], cwd: string, eventBus?: EventBus): Promise<LoadExtensionsResult> {
+export async function loadExtensions(
+	sources: readonly (ExtensionSourceDescriptor | string)[],
+	cwd: string,
+	eventBus?: EventBus,
+): Promise<LoadExtensionsResult> {
+	const normalizedSources = sources.map(
+		(source): ExtensionSourceDescriptor =>
+			typeof source === "string"
+				? { resolvedPath: path.resolve(cwd, source), sourceKind: "standalone", loadKind: "configured" }
+				: source,
+	);
 	const extensions: Extension[] = [];
 	const errors: Array<{ path: string; error: string }> = [];
 	const resolvedEventBus = eventBus ?? new EventBus();
 	const runtime = new ExtensionRuntime();
+	const imported = await Promise.all(normalizedSources.map(source => importExtensionModule(source.resolvedPath, cwd)));
+	let taskRouter: RegisteredTaskRouter | undefined;
 
-	const imported = await Promise.all(paths.map(extPath => importExtensionModule(extPath, cwd)));
-
-	for (let i = 0; i < paths.length; i++) {
-		const extPath = paths[i]!;
-		const { extension, error } = await bindExtension(extPath, imported[i]!, cwd, resolvedEventBus, runtime);
-
+	for (let i = 0; i < normalizedSources.length; i++) {
+		const source = normalizedSources[i]!;
+		const { extension, error } = await bindExtension(source, imported[i]!, cwd, resolvedEventBus, runtime);
 		if (error) {
-			errors.push({ path: extPath, error });
+			errors.push({ path: source.resolvedPath, error });
 			continue;
 		}
-
 		if (extension) {
+			if (extension.taskRouter) {
+				if (taskRouter) {
+					throw new Error(
+						`Task router "${extension.taskRouter.registration.id}" conflicts with already registered router "${taskRouter.registration.id}"`,
+					);
+				}
+				taskRouter = extension.taskRouter;
+			}
 			extensions.push(extension);
 		}
 	}
 
-	return {
-		extensions,
-		errors,
-		runtime,
-	};
+	return { extensions, errors, runtime, taskRouter, sources: normalizedSources };
 }
 
 interface ExtensionManifest {
 	extensions?: string[];
 	themes?: string[];
 	skills?: string[];
+	taskRouterApiVersion?: number;
+	settings?: Record<string, PluginSettingSchema>;
 }
 
-async function readExtensionManifest(packageJsonPath: string): Promise<ExtensionManifest | null> {
+interface ExtensionPackageJson {
+	name?: string;
+	version?: string;
+	omp?: ExtensionManifest;
+	pi?: ExtensionManifest;
+}
+
+async function readExtensionPackage(packageJsonPath: string): Promise<ExtensionPackageJson | null> {
 	try {
-		const pkg = (await Bun.file(packageJsonPath).json()) as { omp?: ExtensionManifest; pi?: ExtensionManifest };
-		const manifest = pkg.omp ?? pkg.pi;
-		if (manifest && typeof manifest === "object") {
-			return manifest;
-		}
-		return null;
+		const pkg = (await Bun.file(packageJsonPath).json()) as ExtensionPackageJson;
+		return pkg && typeof pkg === "object" ? pkg : null;
 	} catch (error) {
-		if (isEnoent(error) || isEacces(error) || hasFsCode(error, "EPERM")) {
-			return null;
-		}
+		if (isEnoent(error) || isEacces(error) || hasFsCode(error, "EPERM")) return null;
 		logger.warn("Failed to read extension manifest", { path: packageJsonPath, error: String(error) });
 		return null;
 	}
+}
+
+async function readExtensionManifest(packageJsonPath: string): Promise<ExtensionManifest | null> {
+	const pkg = await readExtensionPackage(packageJsonPath);
+	return pkg?.omp ?? pkg?.pi ?? null;
 }
 
 function isExtensionFile(name: string): boolean {
@@ -594,126 +640,179 @@ async function discoverHooksInPackageRoot(root: string): Promise<string[]> {
 	return hooks;
 }
 
+function validateManifestSettings(
+	packageName: string,
+	settings: Record<string, PluginSettingSchema> | undefined,
+): void {
+	for (const [key, schema] of Object.entries(settings ?? {})) {
+		if (!schema || typeof schema !== "object" || !["string", "number", "boolean", "enum"].includes(schema.type)) {
+			throw new Error(`Plugin ${packageName} setting ${key} has invalid type`);
+		}
+		const commonKeys = ["type", "description", "secret", "env", "default"];
+		const typeKeys = schema.type === "number" ? ["min", "max", "step"] : schema.type === "enum" ? ["values"] : [];
+		const unknownKey = Object.keys(schema).find(key => !commonKeys.includes(key) && !typeKeys.includes(key));
+		if (unknownKey) throw new Error(`Plugin ${packageName} setting ${key} has invalid field ${unknownKey}`);
+		if (
+			schema.type === "enum" &&
+			(!Array.isArray(schema.values) || schema.values.some(value => typeof value !== "string"))
+		) {
+			throw new Error(`Plugin ${packageName} setting ${key} enum requires string values`);
+		}
+		if (schema.default !== undefined) {
+			const validDefault =
+				(schema.type === "string" && typeof schema.default === "string") ||
+				(schema.type === "number" && typeof schema.default === "number") ||
+				(schema.type === "boolean" && typeof schema.default === "boolean") ||
+				(schema.type === "enum" && schema.values.includes(String(schema.default)));
+			if (!validDefault) throw new Error(`Plugin ${packageName} setting ${key} has invalid default`);
+		}
+	}
+}
+
+async function describeExtensionSource(
+	extPath: string,
+	loadKind: ExtensionSourceDescriptor["loadKind"],
+): Promise<ExtensionSourceDescriptor> {
+	const resolvedPath = path.resolve(extPath);
+	let cursor = path.dirname(resolvedPath);
+	for (;;) {
+		const pkg = await readExtensionPackage(path.join(cursor, "package.json"));
+		const manifest = pkg?.omp ?? pkg?.pi;
+		if (pkg && manifest?.extensions?.some(entry => path.resolve(cursor, entry) === resolvedPath)) {
+			const packageName = pkg.name ?? path.basename(cursor);
+			validateManifestSettings(packageName, manifest.settings);
+			const descriptorManifest: PluginManifest = {
+				version: pkg.version ?? "0.0.0",
+				...manifest,
+			};
+			return {
+				resolvedPath,
+				sourceKind: "packaged",
+				loadKind,
+				packageRoot: cursor,
+				packageName,
+				packageVersion: pkg.version,
+				manifest: descriptorManifest,
+			};
+		}
+		const parent = path.dirname(cursor);
+		if (parent === cursor) break;
+		cursor = parent;
+	}
+	return { resolvedPath, sourceKind: "standalone", loadKind };
+}
+
 /**
  * Discover absolute paths of extensions to load, without importing or
  * binding factories. Hot path on session startup — the scan walks native
  * `.omp`/`.pi` extension capabilities, JS/TS hook factories, the
  * installed-plugin tree, and any configured paths.
  *
- * Subagents reuse the parent's collected paths via the SDK's
- * `preloadedExtensionPaths` option, then call {@link loadExtensions} themselves
- * so each session rebuilds Extension instances bound to its OWN
- * `ExtensionAPI` (cwd, eventBus, runtime). Forwarding the parent's
- * `LoadExtensionsResult` directly would reuse handlers/tools/commands that
- * closed over the parent's `cwd` and event bus.
+ * Subagents reuse the parent's collected source descriptors via the SDK's
+ * `preloadedExtensionSources` option, then call {@link loadExtensions} themselves
+ * so each session rebuilds Extension instances bound to its own runtime while
+ * preserving package authority.
  */
 export interface DiscoverExtensionPathOptions {
 	/** Include ambient native extensions, hooks, and installed plugins. */
 	ambient?: boolean;
 }
 
-export async function discoverExtensionPaths(
+export async function discoverExtensionSources(
 	configuredPaths: string[],
 	cwd: string,
 	disabledExtensionIds?: string[],
 	options: DiscoverExtensionPathOptions = {},
-): Promise<string[]> {
-	const allPaths: string[] = [];
+): Promise<ExtensionSourceDescriptor[]> {
+	const allSources: ExtensionSourceDescriptor[] = [];
 	const seen = new Set<string>();
 	const disabled = new Set(disabledExtensionIds ?? []);
 	const loadOptions = disabledExtensionIds ? { cwd, disabledExtensions: disabledExtensionIds } : { cwd };
-
+	const injectedRoots = getInjectedOmpExtensionCliRoots().map(root => path.resolve(root.path));
 	const isDisabledName = (name: string): boolean => disabled.has(`extension-module:${name}`);
+	const ambientLoadKind = (extPath: string): ExtensionSourceDescriptor["loadKind"] =>
+		injectedRoots.some(root => path.resolve(extPath).startsWith(`${root}${path.sep}`)) ? "explicit" : "discovered";
 
-	const addPath = (extPath: string): void => {
+	const addPath = async (extPath: string, loadKind: ExtensionSourceDescriptor["loadKind"]): Promise<void> => {
 		const resolved = path.resolve(extPath);
-		if (!seen.has(resolved)) {
-			seen.add(resolved);
-			allPaths.push(extPath);
-		}
+		if (seen.has(resolved) || isDisabledName(getExtensionNameFromPath(extPath))) return;
+		seen.add(resolved);
+		allSources.push(await describeExtensionSource(resolved, loadKind));
 	};
-
-	const addPaths = (paths: string[]) => {
-		for (const extPath of paths) {
-			if (isDisabledName(getExtensionNameFromPath(extPath))) continue;
-			addPath(extPath);
-		}
+	const addPaths = async (paths: string[], loadKind: ExtensionSourceDescriptor["loadKind"]) => {
+		for (const extPath of paths) await addPath(extPath, loadKind);
 	};
 
 	const ambient = options.ambient !== false;
 	if (ambient) {
-		// 1. Discover extension modules via capability API (native .omp/.pi only).
-		// Scope the load to the native provider — the extension-module capability
-		// also has claude/codex/gemini/opencode providers, and their items were
-		// discarded here anyway (see #4198). The provider filter skips the walk
-		// entirely instead of running four foreign directory scans and dropping
-		// the results.
+		for (const root of injectedRoots) {
+			const entries = await resolveExtensionEntries(root);
+			if (entries) await addPaths(entries, "explicit");
+		}
+	}
+	if (ambient) {
 		const discovered = await loadCapability<ExtensionModule>(extensionModuleCapability.id, {
 			...loadOptions,
 			providers: ["native"],
 		});
-		for (const ext of discovered.items) {
-			addPath(ext.path);
-		}
+		for (const ext of discovered.items) await addPath(ext.path, ambientLoadKind(ext.path));
 	}
 
-	// 2. Discover JS/TS hook factories and bind them through the extension
-	// runner, which owns the current runtime event bus. Non-ambient discovery
-	// scans only this invocation's configured package roots; it must not consult
-	// settings, installed packages, or process-global CLI injection state.
 	if (ambient) {
 		const hooks = await loadCapability<Hook>(hookCapability.id, loadOptions);
 		for (const hookPath of hooks.items
 			.map(hook => hook.path)
 			.filter(hookPath => isExtensionFile(path.basename(hookPath)))) {
-			addPath(hookPath);
+			await addPath(hookPath, ambientLoadKind(hookPath));
 		}
 	} else {
 		for (const configuredPath of configuredPaths) {
-			addPaths(await discoverHooksInPackageRoot(resolvePath(configuredPath, cwd)));
+			await addPaths(await discoverHooksInPackageRoot(resolvePath(configuredPath, cwd)), "configured");
 		}
 	}
 
-	// 3. Discover extension entry points from installed plugins.
 	if (ambient) {
-		addPaths(await getAllPluginExtensionPaths(cwd));
+		for (const extPath of await getAllPluginExtensionPaths(cwd)) {
+			await addPath(extPath, ambientLoadKind(extPath));
+		}
 	}
 
-	// 4. Explicitly configured paths
 	for (const configuredPath of configuredPaths) {
 		const resolved = resolvePath(configuredPath, cwd);
-
 		let stat: fs1.Stats | null = null;
 		try {
 			stat = await fs.stat(resolved);
 		} catch (err) {
 			if (!isEnoent(err)) throw err;
 		}
-
 		if (stat?.isDirectory()) {
 			const entries = await resolveExtensionEntries(resolved);
 			if (entries) {
-				addPaths(entries);
+				await addPaths(entries, "configured");
 				continue;
 			}
-
-			const discovered = await discoverExtensionsInDir(resolved);
-			if (discovered.length > 0) {
-				addPaths(discovered);
-			}
+			await addPaths(await discoverExtensionsInDir(resolved), "configured");
 			continue;
 		}
-
-		addPath(resolved);
+		await addPath(resolved, "configured");
 	}
 
-	return allPaths;
+	return allSources;
+}
+/** Compatibility path-only view for callers that do not need provenance. */
+export async function discoverExtensionPaths(
+	configuredPaths: string[],
+	cwd: string,
+	disabledExtensionIds?: string[],
+	options: DiscoverExtensionPathOptions = {},
+): Promise<string[]> {
+	return (await discoverExtensionSources(configuredPaths, cwd, disabledExtensionIds, options)).map(
+		source => source.resolvedPath,
+	);
 }
 
 /**
- * Discover and load extensions from standard locations. Composed of
- * {@link discoverExtensionPaths} (FS scan) + {@link loadExtensions}
- * (per-session binding).
+ * Discover and load extensions from standard locations.
  */
 export async function discoverAndLoadExtensions(
 	configuredPaths: string[],
@@ -722,6 +821,6 @@ export async function discoverAndLoadExtensions(
 	disabledExtensionIds?: string[],
 	options: DiscoverExtensionPathOptions = {},
 ): Promise<LoadExtensionsResult> {
-	const paths = await discoverExtensionPaths(configuredPaths, cwd, disabledExtensionIds, options);
-	return loadExtensions(paths, cwd, eventBus);
+	const sources = await discoverExtensionSources(configuredPaths, cwd, disabledExtensionIds, options);
+	return loadExtensions(sources, cwd, eventBus);
 }

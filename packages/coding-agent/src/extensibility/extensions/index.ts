@@ -6,6 +6,8 @@ export type { SlashCommandInfo, SlashCommandLocation, SlashCommandSource } from 
 export {
 	discoverAndLoadExtensions,
 	discoverExtensionPaths,
+	discoverExtensionSources,
+	ExtensionRuntime,
 	ExtensionRuntimeNotInitializedError,
 	loadExtensionFromFactory,
 	loadExtensions,

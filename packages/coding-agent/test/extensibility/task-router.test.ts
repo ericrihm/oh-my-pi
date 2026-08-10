@@ -89,7 +89,7 @@ function resultFor(index: number, agent: string, assignment: string): SingleResu
 
 function readField(value: unknown, key: string): unknown {
 	if (!value || typeof value !== "object" || !(key in value)) return undefined;
-	return value[key];
+	return (value as Record<string, unknown>)[key];
 }
 
 describe("task router SDK bridge", () => {
@@ -116,7 +116,7 @@ describe("task router SDK bridge", () => {
 		});
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 			getProbe().executions.push(options);
-			return resultFor(options.index ?? 0, options.agent.name, options.assignment);
+			return resultFor(options.index ?? 0, options.agent.name, options.assignment ?? "");
 		});
 	});
 

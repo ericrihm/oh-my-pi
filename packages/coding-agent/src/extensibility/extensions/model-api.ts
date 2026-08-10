@@ -7,7 +7,7 @@
  * duplicating resolution/family heuristics.
  */
 import type { Api, Model } from "@oh-my-pi/pi-ai";
-import { modelFamilyToken } from "@oh-my-pi/pi-catalog/identity";
+import { modelFamilyToken, stableModelVendorId } from "@oh-my-pi/pi-catalog/identity";
 import type { ModelRegistry } from "../../config/model-registry";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
@@ -22,18 +22,33 @@ export function createExtensionModelQuery(
 	settings: Settings | undefined,
 	getModel: () => Model | undefined,
 ): ExtensionModelQuery {
+	const resolve = (spec: string) =>
+		resolveModelRoleValue(spec, modelRegistry.getAvailable(), {
+			settings,
+			matchPreferences: getModelMatchPreferences(settings),
+		});
 	return {
 		list: () => modelRegistry.getAvailable(),
 		current: () => getModel(),
 		// resolveModelRoleValue expands a role alias (`@slow`) to its full configured
-		// priority list and tries each pattern — the same path core selection uses — so a
-		// fallback model lower in the list still resolves. Plain model strings pass through
-		// as a single pattern.
-		resolve: (spec: string): Model<Api> | undefined =>
-			resolveModelRoleValue(spec, modelRegistry.getAvailable(), {
-				settings,
-				matchPreferences: getModelMatchPreferences(settings),
-			}).model,
+		// priority list and tries each pattern — the same path core selection uses.
+		resolve: (spec: string): Model<Api> | undefined => resolve(spec).model,
 		family: (model: Model<Api>): string => modelFamilyToken(model.id) || model.provider.toLowerCase(),
+		resolveSelection: async spec => {
+			const resolved = resolve(spec);
+			if (!resolved.model) return undefined;
+			const model = resolved.model;
+			const apiKey = await modelRegistry.getApiKey(model);
+			return {
+				model,
+				provider: model.provider,
+				id: model.id,
+				...(typeof resolved.thinkingLevel === "string" && resolved.thinkingLevel !== "auto"
+					? { thinkingLevel: resolved.thinkingLevel }
+					: {}),
+				authenticated: apiKey !== undefined,
+				vendorId: stableModelVendorId(model.id, model.provider),
+			};
+		},
 	};
 }

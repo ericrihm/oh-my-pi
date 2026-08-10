@@ -46,6 +46,8 @@ export interface PluginManifest {
 
 	/** Settings schema for plugin configuration */
 	settings?: Record<string, PluginSettingSchema>;
+	/** Task router API version required by this package. */
+	taskRouterApiVersion?: number;
 }
 
 // =============================================================================

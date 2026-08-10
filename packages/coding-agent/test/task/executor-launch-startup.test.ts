@@ -74,7 +74,7 @@ it("overlaps registry refresh with session-file opening and session setup", asyn
 		sessionCreated = true;
 		const result: CreateAgentSessionResult = {
 			session,
-			extensionsResult: { extensions: [], errors: [], runtime: new ExtensionRuntime() },
+			extensionsResult: { extensions: [], errors: [], runtime: new ExtensionRuntime(), sources: [] },
 			setToolUIContext: () => {},
 			eventBus: new EventBus(),
 		};

@@ -966,7 +966,12 @@ export class DefaultResourceLoader implements ResourceLoader {
 	readonly __ompLegacyPiLoader = true as const;
 	#state: ResolvedLoaderState;
 	#options: DefaultResourceLoaderOptions;
-	#extensionsResult: LoadExtensionsResult = { extensions: [], errors: [], runtime: createExtensionRuntime() };
+	#extensionsResult: LoadExtensionsResult = {
+		extensions: [],
+		errors: [],
+		runtime: createExtensionRuntime(),
+		sources: [],
+	};
 	#skills: Skill[] = [];
 	#skillDiagnostics: ResourceDiagnostic[] = [];
 	#prompts: PromptTemplate[] = [];
@@ -1115,7 +1120,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const { cwd, noExtensions, additionalExtensionPaths, extensionFactories, eventBus } = this.#state;
 
 		if (noExtensions && additionalExtensionPaths.length === 0 && extensionFactories.length === 0) {
-			return { extensions: [], errors: [], runtime: createExtensionRuntime() };
+			return { extensions: [], errors: [], runtime: createExtensionRuntime(), sources: [] };
 		}
 
 		const paths = await discoverSessionExtensionPaths(
@@ -1350,7 +1355,7 @@ export async function createAgentSession(
 	// `preloadedExtensions` seam. Skipping this branch would let
 	// `createAgentSession` re-run its own discovery and undo the caller's
 	// `noExtensions: true`.
-	if (rest.preloadedExtensions === undefined && rest.preloadedExtensionPaths === undefined) {
+	if (rest.preloadedExtensions === undefined && rest.preloadedExtensionSources === undefined) {
 		forwarded.preloadedExtensions = state.extensionsResult;
 	}
 

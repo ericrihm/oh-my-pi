@@ -489,6 +489,11 @@ describe("createAgentSession credential_disabled subscription", () => {
 			const throwingExtension: Extension = {
 				path: "test://throwing-credential-disabled",
 				resolvedPath: "test://throwing-credential-disabled",
+				source: {
+					resolvedPath: "test://throwing-credential-disabled",
+					sourceKind: "standalone",
+					loadKind: "configured",
+				},
 				handlers: new Map([
 					[
 						"credential_disabled",

@@ -43,6 +43,7 @@ describe("createAgentSession preloadedExtensions isolation (issue #2190)", () =>
 		const preloaded: LoadExtensionsResult = {
 			extensions: [],
 			errors: [],
+			sources: [],
 			runtime: {
 				flagValues: new Map(),
 				pendingProviderRegistrations: [],

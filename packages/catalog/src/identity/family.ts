@@ -272,6 +272,21 @@ export const modelFamilyToken = memo((modelId: string): string => {
 });
 
 /**
+ * Stable catalog-owned vendor identity for persistence and policy matching.
+ * Unlike {@link modelFamilyToken}, this vocabulary does not expose model-line
+ * names such as `kimi` or `qwen`, and it follows the upstream vendor through
+ * proxy providers.
+ */
+export function stableModelVendorId(modelId: string, provider: string): string {
+	const family = modelFamilyToken(modelId);
+	if (family === "kimi") return "moonshot";
+	if (family === "qwen") return "alibaba";
+	if (family === "gemma" || family === "gemini") return "google";
+	if (family === "anthropic" || family === "openai" || family === "deepseek") return family;
+	return family || provider.toLowerCase();
+}
+
+/**
  * True for Claude generations that support extended thinking: Sonnet/Opus 3.7+,
  * every 4.x/5+ Opus/Sonnet, and the Fable/Mythos generation. Pre-thinking
  * models (Claude 3.5 and older) are excluded so no thinking effort dial is
