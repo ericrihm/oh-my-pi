@@ -71,3 +71,32 @@ These failures occur at the missing public contracts or their first observable b
 - The router must run after public validation but before all spawn/async side effects, including mixed batches.
 - Timeout and external abort need once-only settlement and linked-signal cleanup; the RED test intentionally exercises the real platform deadline through a shortened test seam.
 - Stable vendor identity must come from catalog/provider metadata, never from Regulus adapter tables, and must remain distinct from opaque `family()` values.
+
+
+## Review-fix RED expansion
+
+The final RED set supersedes the earlier counts above. It keeps production code untouched and adds independent named assertions for the review findings:
+
+- real SDK assembly receives one initially unbound, one-shot router reference and binds it only after extension load;
+- a non-null ordered mixed-batch decision reaches native execution with sealed strict selectors, while malformed, partial, overlong, reversed, refused, timed-out, and aborted routing all stop before allocation, registry/job registration, lifecycle, auth lookup where routing has not completed, or subprocess execution;
+- strict preflight independently rejects selector/effort mismatch, stable-vendor mismatch, `task.maxEffort` violation, and expired live authentication; successful strict execution must suppress configured prewalk and carry the sealed selector/vendor/effort;
+- unsupported router API versions and competing router owners fail during session construction;
+- async `onStarted` is registration-ordered and gates child setup; start and settlement callback failures are contained, and settlement remains once-only;
+- completed writers expose an opaque review reference; the reviewer receives the trusted writer descriptor, fixed strict review schema, exact assignment/output bytes, byte counts, SHA-256 digests, and one length-framed system-context segment despite delimiter-like payload text;
+- packaged `--plugin-dir` sources retain validated manifest authority/defaults through loader, runner, SDK, task forwarding, and child reuse; standalone files stay authority-free; linked disable/enable and routing settings are read freshly;
+- `resolveSelection()` independently requires exact effort, live authentication, canonical provider/id, and catalog-derived stable vendor IDs for Kimi through OpenRouter (`moonshot`) and Qwen through Together (`alibaba`), without changing opaque `family()`.
+
+Final focused command:
+
+```text
+$ PI_COMPILED=1 /Users/eric/.cache/omp-bun/node_modules/.bin/bun test packages/coding-agent/test/extensibility/task-router.test.ts packages/coding-agent/test/extensibility/extension-source-authority.test.ts packages/coding-agent/test/extensibility/ext-model-query.test.ts packages/coding-agent/test/task/task-batch.test.ts
+exit 1
+23 pass
+27 fail
+145 expect() calls
+Ran 50 tests across 4 files. [6.33s]
+```
+
+All 27 failed tests name absent Phase 1 contracts. There were no unhandled fixture/load errors. One lifecycle test originally waited on the deliberately missing callback and hit Bun's timeout; it was tightened to assert `started === 1` before waiting. The targeted final check now fails immediately at that missing callback contract (`expected 1`, `received 0`, 73.64 ms), rather than by timeout.
+
+No production file was changed. No provider or paid model call ran.

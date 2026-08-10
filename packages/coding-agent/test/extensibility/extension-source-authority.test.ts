@@ -1,10 +1,40 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { injectPluginDirRoots } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { discoverExtensionPaths } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
-import { getAgentDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { PluginManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/manager";
+import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
+import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
+import type { AgentDefinition, SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
+import { getAgentDir, getPluginsLockfile, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+
+interface SourceProbe {
+	registrations: number;
+	routes: number;
+	sources: unknown[];
+	settings: unknown[];
+	executions: unknown[];
+}
+
+declare global {
+	var __ompSourceAuthorityProbe: SourceProbe | undefined;
+}
+
+const taskAgent: AgentDefinition = {
+	name: "task",
+	description: "General-purpose task agent",
+	systemPrompt: "You are a task agent.",
+	source: "bundled",
+};
 
 function requireDescriptor(value: unknown): object {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -13,15 +43,45 @@ function requireDescriptor(value: unknown): object {
 	return value;
 }
 
+function readField(value: unknown, key: string): unknown {
+	if (!value || typeof value !== "object" || !(key in value)) return undefined;
+	return value[key];
+}
+
+function firstText(result: { content: Array<{ type: string; text?: string }> }): string {
+	return result.content.find(part => part.type === "text")?.text ?? "";
+}
+
+function completedResult(index: number, assignment: string): SingleResult {
+	return {
+		index,
+		id: `source-${index}`,
+		agent: "task",
+		agentSource: "bundled",
+		task: assignment,
+		assignment,
+		exitCode: 0,
+		output: `ran:${assignment}`,
+		stderr: "",
+		truncated: false,
+		durationMs: 1,
+		tokens: 0,
+		requests: 0,
+	};
+}
+
 describe("extension source authority", () => {
 	let tempHome: string;
 	let cwd: string;
 	let pluginRoot: string;
 	let packagedEntry: string;
 	let standaloneEntry: string;
+	let authStorage: AuthStorage;
+	let modelRegistry: ModelRegistry;
+	const sessions: Array<{ dispose(): Promise<void> }> = [];
 	const originalAgentDir = getAgentDir();
 
-	beforeEach(async () => {
+	beforeAll(async () => {
 		tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "omp-extension-source-red-"));
 		cwd = path.join(tempHome, "project");
 		pluginRoot = path.join(tempHome, "regulus-plugin");
@@ -46,30 +106,116 @@ describe("extension source authority", () => {
 					extensions: ["./dist/index.ts"],
 					taskRouterApiVersion: 1,
 					settings: {
-						routingMode: { type: "string", enum: ["off", "observe", "enforce"], default: "off" },
-						orchestrationPolicy: { type: "string", enum: ["manual", "always"], default: "manual" },
+						routingMode: {
+							type: "enum",
+							values: ["off", "observe", "enforce"],
+							default: "observe",
+						},
+						orchestrationPolicy: {
+							type: "enum",
+							values: ["manual", "always"],
+							default: "manual",
+						},
 					},
 				},
 			}),
 		);
-		await fs.writeFile(packagedEntry, "export default function () {}\n");
+		await fs.writeFile(
+			packagedEntry,
+			[
+				"export default function (pi) {",
+				"  const probe = globalThis.__ompSourceAuthorityProbe;",
+				"  probe.registrations += 1;",
+				"  pi.registerTaskRouter({",
+				"    id: 'source-probe',",
+				"    apiVersion: 1,",
+				"    async route(_request, ctx) {",
+				"      probe.routes += 1;",
+				"      probe.sources.push(ctx.source);",
+				"      probe.settings.push({",
+				"        routingMode: ctx.settings.get('routingMode'),",
+				"        orchestrationPolicy: ctx.settings.get('orchestrationPolicy'),",
+				"      });",
+				"      return null;",
+				"    },",
+				"  });",
+				"}",
+			].join("\n"),
+		);
 		await fs.writeFile(standaloneEntry, "export default function () {}\n");
+		authStorage = await AuthStorage.create(path.join(tempHome, "auth.db"));
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempHome, "models.yml"));
+	});
+
+	beforeEach(() => {
+		globalThis.__ompSourceAuthorityProbe = { registrations: 0, routes: 0, sources: [], settings: [], executions: [] };
+		AgentRegistry.resetGlobalForTests();
+		AgentLifecycleManager.resetGlobalForTests();
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [taskAgent], projectAgentsDir: null });
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			globalThis.__ompSourceAuthorityProbe?.executions.push(options);
+			return completedResult(options.index ?? 0, options.assignment);
+		});
 	});
 
 	afterEach(async () => {
+		for (const session of sessions.splice(0)) await session.dispose();
+		vi.restoreAllMocks();
+		AgentLifecycleManager.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
+	});
+
+	afterAll(async () => {
 		await injectPluginDirRoots(tempHome, [], cwd);
+		authStorage.close();
+		delete globalThis.__ompSourceAuthorityProbe;
 		setAgentDir(originalAgentDir);
 		await removeWithRetries(tempHome);
 	});
 
-	it("carries manifest authority and defaults only for a packaged --plugin-dir entry", async () => {
+	async function discoverPackagedSource(): Promise<object> {
 		await injectPluginDirRoots(tempHome, [pluginRoot], cwd);
 		const discovered: unknown = await discoverExtensionPaths([], cwd, undefined, { ambient: true });
-		expect(Array.isArray(discovered)).toBe(true);
 		if (!Array.isArray(discovered)) throw new Error("expected extension source descriptors");
 		const packaged = discovered
 			.map(requireDescriptor)
 			.find(source => "resolvedPath" in source && source.resolvedPath === packagedEntry);
+		if (!packaged) throw new Error("packaged extension source was not discovered");
+		return packaged;
+	}
+
+	async function createSessionFromSources(sources: object[], parentTaskPrefix?: string) {
+		const options = {
+			cwd,
+			agentDir: getAgentDir(),
+			sessionManager: SessionManager.inMemory(cwd),
+			modelRegistry,
+			settings: Settings.isolated({
+				"task.batch": true,
+				"task.isolation.mode": "none",
+				"async.enabled": true,
+			}),
+			preloadedExtensionSources: sources,
+			parentTaskPrefix,
+			toolNames: ["task"],
+			enableLsp: false,
+			enableMCP: false,
+			skipPythonPreflight: true,
+			skills: [],
+			rules: [],
+			preloadedCustomToolPaths: [],
+			contextFiles: [],
+			promptTemplates: [],
+		};
+		const created = await createAgentSession(options);
+		sessions.push(created.session);
+		const tool = created.session.agent.state.tools.find(candidate => candidate.name === "task");
+		if (!tool) throw new Error("task tool was not assembled");
+		return { session: created.session, tool };
+	}
+
+	it("carries valid manifest authority and defaults in a packaged --plugin-dir descriptor", async () => {
+		const packaged = await discoverPackagedSource();
 
 		expect(packaged).toMatchObject({
 			resolvedPath: packagedEntry,
@@ -81,16 +227,37 @@ describe("extension source authority", () => {
 			manifest: {
 				taskRouterApiVersion: 1,
 				settings: {
-					routingMode: { default: "off" },
-					orchestrationPolicy: { default: "manual" },
+					routingMode: { type: "enum", values: ["off", "observe", "enforce"], default: "observe" },
+					orchestrationPolicy: { type: "enum", values: ["manual", "always"], default: "manual" },
 				},
 			},
 		});
 	});
 
-	it("does not infer package authority for an explicitly loaded standalone file", async () => {
+	it("refuses invalid plugin setting grammar during source discovery", async () => {
+		const invalidRoot = path.join(tempHome, "invalid-plugin");
+		await fs.mkdir(invalidRoot, { recursive: true });
+		await fs.writeFile(path.join(invalidRoot, "index.ts"), "export default function () {}\n");
+		await fs.writeFile(
+			path.join(invalidRoot, "package.json"),
+			JSON.stringify({
+				name: "invalid-source-probe",
+				version: "1.0.0",
+				omp: {
+					extensions: ["./index.ts"],
+					settings: { routingMode: { type: "string", enum: ["off", "observe"], default: "observe" } },
+				},
+			}),
+		);
+		await injectPluginDirRoots(tempHome, [invalidRoot], cwd);
+
+		await expect(discoverExtensionPaths([], cwd, undefined, { ambient: true })).rejects.toThrow(
+			/invalid-source-probe.*routingMode|routingMode.*type.*enum/i,
+		);
+	});
+
+	it("keeps standalone configured files outside package authority", async () => {
 		const discovered: unknown = await discoverExtensionPaths([standaloneEntry], cwd, undefined, { ambient: false });
-		expect(Array.isArray(discovered)).toBe(true);
 		if (!Array.isArray(discovered)) throw new Error("expected extension source descriptors");
 		const standalone = requireDescriptor(discovered[0]);
 
@@ -103,5 +270,53 @@ describe("extension source authority", () => {
 		expect(standalone).not.toHaveProperty("packageName");
 		expect(standalone).not.toHaveProperty("packageVersion");
 		expect(standalone).not.toHaveProperty("manifest");
+	});
+
+	it("preserves explicit package authority through runner, task, and subagent reuse", async () => {
+		const packaged = await discoverPackagedSource();
+		expect(await Bun.file(getPluginsLockfile()).exists()).toBe(false);
+		const parent = await createSessionFromSources([packaged]);
+		expect(readField(parent.session, "extensionSources")).toEqual([packaged]);
+
+		const parentResult = await parent.tool.execute("parent", { agent: "task", task: "Parent task." } as never);
+		expect(firstText(parentResult)).toMatch(/Spawned agent|ran:Parent task/);
+		expect(globalThis.__ompSourceAuthorityProbe).toMatchObject({
+			registrations: 1,
+			routes: 1,
+			sources: [expect.objectContaining({ packageName: "regulus-source-probe", loadKind: "explicit" })],
+			settings: [{ routingMode: "observe", orchestrationPolicy: "manual" }],
+		});
+		const forwarded = readField(globalThis.__ompSourceAuthorityProbe?.executions[0], "preloadedExtensionSources");
+		expect(forwarded).toEqual([packaged]);
+
+		const child = await createSessionFromSources([packaged], "source-child");
+		expect(readField(child.session, "extensionSources")).toEqual([packaged]);
+		await child.tool.execute("child", { agent: "task", task: "Child task." } as never);
+		expect(globalThis.__ompSourceAuthorityProbe).toMatchObject({ registrations: 2, routes: 2 });
+	});
+
+	it("checks linked enablement and settings freshly on every routed task", async () => {
+		const packaged = await discoverPackagedSource();
+		const { tool } = await createSessionFromSources([packaged]);
+		await tool.execute("explicit", { agent: "task", task: "Explicit load." } as never);
+		expect(globalThis.__ompSourceAuthorityProbe?.routes).toBe(1);
+
+		const manager = new PluginManager(cwd);
+		await manager.link(pluginRoot);
+		await manager.setEnabled("regulus-source-probe", false);
+		await tool.execute("disabled", { agent: "task", task: "Disabled link." } as never);
+		expect(globalThis.__ompSourceAuthorityProbe?.routes).toBe(1);
+
+		await manager.setEnabled("regulus-source-probe", true);
+		await manager.setPluginSetting("regulus-source-probe", "routingMode", "off");
+		await tool.execute("off", { agent: "task", task: "Routing off." } as never);
+		expect(globalThis.__ompSourceAuthorityProbe?.routes).toBe(1);
+
+		await manager.setPluginSetting("regulus-source-probe", "routingMode", "observe");
+		await tool.execute("observe", { agent: "task", task: "Routing observed." } as never);
+		expect(globalThis.__ompSourceAuthorityProbe).toMatchObject({
+			routes: 2,
+			settings: expect.arrayContaining([{ routingMode: "observe", orchestrationPolicy: "manual" }]),
+		});
 	});
 });
