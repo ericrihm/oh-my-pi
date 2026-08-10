@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { Api, Model } from "@oh-my-pi/pi-ai";
+import { type Api, Effort, type Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import type { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -23,8 +23,21 @@ function model(id: string, name: string, provider: string): Model<"anthropic-mes
 const claude = model("claude-opus-4-8", "Claude Opus 4.8", "anthropic");
 const claudePrev = model("claude-opus-4-7", "Claude Opus 4.7", "anthropic");
 const gpt = model("gpt-5.4", "GPT-5.4", "openai");
+const kimi = buildModel({
+	id: "kimi-k3",
+	name: "Kimi K3",
+	api: "anthropic-messages",
+	provider: "moonshot",
+	baseUrl: "https://example.test",
+	reasoning: true,
+	thinking: { mode: "effort", efforts: [Effort.Low, Effort.High, Effort.Max] },
+	input: ["text"],
+	cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 200000,
+	maxTokens: 8192,
+});
 
-const available = [claude, gpt] as Model<Api>[];
+const available = [claude, gpt, kimi] as Model<Api>[];
 
 /** Minimal registry stub: only the methods the facade and core resolver touch. */
 function registry(): ModelRegistry {
@@ -67,5 +80,23 @@ describe("createExtensionModelQuery", () => {
 		const q = createExtensionModelQuery(registry(), undefined, () => undefined);
 		expect(q.family(claude)).toBe(q.family(claudePrev));
 		expect(q.family(claude)).not.toBe(q.family(gpt));
+	});
+
+	test("resolveSelection() returns canonical authenticated selector metadata without changing family()", () => {
+		const q = createExtensionModelQuery(registry(), undefined, () => undefined);
+		const opaqueFamily = q.family(kimi);
+
+		const selection = q.resolveSelection("moonshot/kimi-k3:max");
+
+		expect(selection).toMatchObject({
+			model: kimi,
+			provider: "moonshot",
+			id: "kimi-k3",
+			thinkingLevel: Effort.Max,
+			authenticated: true,
+			vendorId: "moonshot",
+		});
+		expect(q.family(kimi)).toBe(opaqueFamily);
+		expect(selection?.vendorId).not.toBe(opaqueFamily);
 	});
 });

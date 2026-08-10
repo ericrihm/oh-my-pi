@@ -194,6 +194,24 @@ describe("task.batch schema gating", () => {
 		const batch = await TaskTool.create(createSession({ settings: { "task.batch": true } }));
 		expect(getSchemaProperties(batch).schema).toBeUndefined();
 	});
+
+	it("exposes review references but no caller-controlled route identity or model override", async () => {
+		mockDiscovery();
+
+		const flat = await TaskTool.create(createSession({ settings: { "task.batch": false } }));
+		const flatProperties = getSchemaProperties(flat);
+		expect(flatProperties.reviewOfRouteId).toBeDefined();
+		for (const forbidden of ["model", "routeId", "router", "provenance"]) {
+			expect(flatProperties[forbidden]).toBeUndefined();
+		}
+
+		const batch = await TaskTool.create(createSession({ settings: { "task.batch": true } }));
+		const itemProperties = getBatchItemProperties(batch);
+		expect(itemProperties.reviewOfRouteId).toBeDefined();
+		for (const forbidden of ["model", "routeId", "router", "provenance"]) {
+			expect(itemProperties[forbidden]).toBeUndefined();
+		}
+	});
 });
 
 describe("task.batch validation", () => {
