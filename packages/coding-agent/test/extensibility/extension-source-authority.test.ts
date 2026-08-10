@@ -9,6 +9,7 @@ import { discoverExtensionPaths } from "@oh-my-pi/pi-coding-agent/extensibility/
 import { PluginManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/manager";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -34,6 +35,12 @@ const taskAgent: AgentDefinition = {
 	description: "General-purpose task agent",
 	systemPrompt: "You are a task agent.",
 	source: "bundled",
+};
+const restrictedAgent: AgentDefinition = {
+	...taskAgent,
+	name: "restricted",
+	description: "Restricted task agent",
+	tools: ["read"],
 };
 
 function requireDescriptor(value: unknown): object {
@@ -109,7 +116,7 @@ describe("extension source authority", () => {
 						routingMode: {
 							type: "enum",
 							values: ["off", "observe", "enforce"],
-							default: "observe",
+							default: "off",
 						},
 						orchestrationPolicy: {
 							type: "enum",
@@ -151,10 +158,9 @@ describe("extension source authority", () => {
 		globalThis.__ompSourceAuthorityProbe = { registrations: 0, routes: 0, sources: [], settings: [], executions: [] };
 		AgentRegistry.resetGlobalForTests();
 		AgentLifecycleManager.resetGlobalForTests();
-		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [taskAgent], projectAgentsDir: null });
-		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
-			globalThis.__ompSourceAuthorityProbe?.executions.push(options);
-			return completedResult(options.index ?? 0, options.assignment);
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [taskAgent, restrictedAgent],
+			projectAgentsDir: null,
 		});
 	});
 
@@ -227,7 +233,7 @@ describe("extension source authority", () => {
 			manifest: {
 				taskRouterApiVersion: 1,
 				settings: {
-					routingMode: { type: "enum", values: ["off", "observe", "enforce"], default: "observe" },
+					routingMode: { type: "enum", values: ["off", "observe", "enforce"], default: "off" },
 					orchestrationPolicy: { type: "enum", values: ["manual", "always"], default: "manual" },
 				},
 			},
@@ -272,31 +278,78 @@ describe("extension source authority", () => {
 		expect(standalone).not.toHaveProperty("manifest");
 	});
 
-	it("preserves explicit package authority through runner, task, and subagent reuse", async () => {
+	it("preserves explicit package authority through a real nested subagent session rebuild", async () => {
 		const packaged = await discoverPackagedSource();
 		expect(await Bun.file(getPluginsLockfile()).exists()).toBe(false);
 		const parent = await createSessionFromSources([packaged]);
 		expect(readField(parent.session, "extensionSources")).toEqual([packaged]);
+		expect(globalThis.__ompSourceAuthorityProbe).toMatchObject({ registrations: 1 });
 
-		const parentResult = await parent.tool.execute("parent", { agent: "task", task: "Parent task." } as never);
-		expect(firstText(parentResult)).toMatch(/Spawned agent|ran:Parent task/);
-		expect(globalThis.__ompSourceAuthorityProbe).toMatchObject({
-			registrations: 1,
-			routes: 1,
-			sources: [expect.objectContaining({ packageName: "regulus-source-probe", loadKind: "explicit" })],
-			settings: [{ routingMode: "observe", orchestrationPolicy: "manual" }],
+		const realCreateAgentSession = sdkModule.createAgentSession;
+		const rebuilt: Array<{ options: unknown; session: unknown }> = [];
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			const created = await realCreateAgentSession(options);
+			rebuilt.push({ options, session: created.session });
+			Object.defineProperty(created.session, "prompt", {
+				configurable: true,
+				value: async () => {
+					throw new Error("stop after real nested session rebuild");
+				},
+			});
+			return created;
 		});
-		const forwarded = readField(globalThis.__ompSourceAuthorityProbe?.executions[0], "preloadedExtensionSources");
-		expect(forwarded).toEqual([packaged]);
 
-		const child = await createSessionFromSources([packaged], "source-child");
-		expect(readField(child.session, "extensionSources")).toEqual([packaged]);
-		await child.tool.execute("child", { agent: "task", task: "Child task." } as never);
-		expect(globalThis.__ompSourceAuthorityProbe).toMatchObject({ registrations: 2, routes: 2 });
+		const acceptance = await parent.tool.execute("nested", {
+			agent: "task",
+			task: "Build a real child session.",
+		} as never);
+		expect(firstText(acceptance)).toMatch(/Spawned agent/i);
+		await Promise.all((parent.session.asyncJobManager?.getAllJobs() ?? []).map(job => job.promise));
+
+		expect(rebuilt).toHaveLength(1);
+		expect(readField(rebuilt[0]?.options, "preloadedExtensionSources")).toEqual([packaged]);
+		expect(readField(rebuilt[0]?.session, "extensionSources")).toEqual([packaged]);
+		expect(globalThis.__ompSourceAuthorityProbe).toMatchObject({
+			registrations: 2,
+			settings: expect.arrayContaining([{ routingMode: "off", orchestrationPolicy: "manual" }]),
+		});
+	});
+
+	it("clears package authority when restricted nested execution resets extension isolation", async () => {
+		const packaged = await discoverPackagedSource();
+		const parent = await createSessionFromSources([packaged]);
+		const realCreateAgentSession = sdkModule.createAgentSession;
+		const rebuilt: Array<{ options: unknown; session: unknown }> = [];
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			const created = await realCreateAgentSession(options);
+			rebuilt.push({ options, session: created.session });
+			Object.defineProperty(created.session, "prompt", {
+				configurable: true,
+				value: async () => {
+					throw new Error("stop after restricted nested session rebuild");
+				},
+			});
+			return created;
+		});
+
+		await parent.tool.execute("restricted", {
+			agent: "restricted",
+			task: "Run without inherited authority.",
+		} as never);
+		await Promise.all((parent.session.asyncJobManager?.getAllJobs() ?? []).map(job => job.promise));
+
+		expect(rebuilt).toHaveLength(1);
+		expect(readField(rebuilt[0]?.options, "preloadedExtensionSources")).toEqual([]);
+		expect(readField(rebuilt[0]?.session, "extensionSources")).toEqual([]);
+		expect(globalThis.__ompSourceAuthorityProbe).toMatchObject({ registrations: 1 });
 	});
 
 	it("checks linked enablement and settings freshly on every routed task", async () => {
 		const packaged = await discoverPackagedSource();
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			globalThis.__ompSourceAuthorityProbe?.executions.push(options);
+			return completedResult(options.index ?? 0, options.assignment);
+		});
 		const { tool } = await createSessionFromSources([packaged]);
 		await tool.execute("explicit", { agent: "task", task: "Explicit load." } as never);
 		expect(globalThis.__ompSourceAuthorityProbe?.routes).toBe(1);

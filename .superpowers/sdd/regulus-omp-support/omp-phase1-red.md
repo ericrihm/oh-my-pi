@@ -22,11 +22,15 @@ Recorded at `2026-08-10`. Scope is only `/Users/eric/dev/oh-my-pi-regulus-omp-su
   - exclusive router ownership with both owners named
   - 30-second deadline, timeout abort, and caller-abort propagation
   - no-router and `null` compatibility
+- `packages/coding-agent/test/extensibility/task-router-phase2.test.ts`
+  - quarantined strict-preflight, lifecycle, settlement, writer-review, and pre-truncation receipt contracts
 - `packages/coding-agent/test/extensibility/extension-source-authority.test.ts`
-  - source-bearing packaged `--plugin-dir` descriptor and manifest defaults
+  - source-bearing packaged `--plugin-dir` descriptor, validated enum defaults (`routingMode: off`), and invalid-schema refusal
   - standalone source remains without package authority
+  - real nested SDK/subagent session rebuild inherits packaged authority; restricted/isolation reset clears it
 - `packages/coding-agent/test/extensibility/ext-model-query.test.ts`
-  - canonical authenticated selector metadata, exact `max` effort, stable vendor ID, and unchanged opaque `family()`
+  - separate functional and configured-but-nonfunctional Kimi/Qwen cases
+  - credential-probe invocation, canonical selector metadata, exact effort, catalog-derived stable vendor ID, and unchanged opaque `family()`
 - `packages/coding-agent/test/task/task-batch.test.ts`
   - `reviewOfRouteId` in flat and batch item schemas
   - absence of public `model`, route ID, router, and provenance controls
@@ -34,9 +38,9 @@ Recorded at `2026-08-10`. Scope is only `/Users/eric/dev/oh-my-pi-regulus-omp-su
 ## Formatting
 
 ```text
-$ node_modules/.bin/biome check --write packages/coding-agent/test/extensibility/task-router.test.ts packages/coding-agent/test/extensibility/extension-source-authority.test.ts packages/coding-agent/test/extensibility/ext-model-query.test.ts packages/coding-agent/test/task/task-batch.test.ts
+$ node_modules/.bin/biome check --write packages/coding-agent/test/extensibility/task-router.test.ts packages/coding-agent/test/extensibility/task-router-phase2.test.ts packages/coding-agent/test/extensibility/extension-source-authority.test.ts packages/coding-agent/test/extensibility/ext-model-query.test.ts packages/coding-agent/test/task/task-batch.test.ts
 exit 0
-Checked 4 files in 20ms. Fixed 2 files.
+Checked 5 files in 55ms. Fixed 3 files.
 ```
 
 ## Focused RED command
@@ -52,7 +56,7 @@ Ran 33 tests across 4 files. [1372.00ms]
 
 The ten failures are missing-contract failures:
 
-1. Public task schemas do not expose `reviewOfRouteId` and still expose the legacy caller `model` field.
+1. Public task schemas do not expose `reviewOfRouteId`; the existing closed schemas already omit legacy caller-controlled route identity fields.
 2. Loaded extensions have no `registerTaskRouter`, so SDK-assembled flat/batch calls do not reach a router.
 3. Router refusal cannot yet gate a mixed batch atomically before spawn/registration.
 4. Multiple routers are not rejected because router registration does not exist.
@@ -75,28 +79,42 @@ These failures occur at the missing public contracts or their first observable b
 
 ## Review-fix RED expansion
 
-The final RED set supersedes the earlier counts above. It keeps production code untouched and adds independent named assertions for the review findings:
+The authoritative Phase 1 gate supersedes the earlier counts above. It keeps production code untouched and adds independent named assertions for the Phase 1 review findings:
 
 - real SDK assembly receives one initially unbound, one-shot router reference and binds it only after extension load;
-- a non-null ordered mixed-batch decision reaches native execution with sealed strict selectors, while malformed, partial, overlong, reversed, refused, timed-out, and aborted routing all stop before allocation, registry/job registration, lifecycle, auth lookup where routing has not completed, or subprocess execution;
-- strict preflight independently rejects selector/effort mismatch, stable-vendor mismatch, `task.maxEffort` violation, and expired live authentication; successful strict execution must suppress configured prewalk and carry the sealed selector/vendor/effort;
+- a non-null ordered mixed-batch decision reaches native execution, while malformed, partial, overlong, reversed, refused, timed-out, and aborted routing all stop before allocation, registry/job registration, lifecycle, auth lookup where routing has not completed, or subprocess execution;
 - unsupported router API versions and competing router owners fail during session construction;
-- async `onStarted` is registration-ordered and gates child setup; start and settlement callback failures are contained, and settlement remains once-only;
-- completed writers expose an opaque review reference; the reviewer receives the trusted writer descriptor, fixed strict review schema, exact assignment/output bytes, byte counts, SHA-256 digests, and one length-framed system-context segment despite delimiter-like payload text;
-- packaged `--plugin-dir` sources retain validated manifest authority/defaults through loader, runner, SDK, task forwarding, and child reuse; standalone files stay authority-free; linked disable/enable and routing settings are read freshly;
-- `resolveSelection()` independently requires exact effort, live authentication, canonical provider/id, and catalog-derived stable vendor IDs for Kimi through OpenRouter (`moonshot`) and Qwen through Together (`alibaba`), without changing opaque `family()`.
+- packaged `--plugin-dir` sources use real enum manifest grammar, reject invalid setting schemas, retain validated authority/defaults through loader and SDK forwarding, and enter a real nested session rebuild; only the child prompt is stopped after rebuilding, rather than mocking descriptor reuse;
+- restricted nested execution proves extension-isolation resets clear inherited authority;
+- linked disable/enable and routing settings are read freshly;
+- `resolveSelection()` has four independent Kimi/Qwen functional/nonfunctional cases. Each asserts the exact credential probe, canonical provider/id, exact effort, and catalog-derived stable vendor ID without changing opaque `family()`.
 
-Final focused command:
+Authoritative Phase 1 focused command:
 
 ```text
 $ PI_COMPILED=1 /Users/eric/.cache/omp-bun/node_modules/.bin/bun test packages/coding-agent/test/extensibility/task-router.test.ts packages/coding-agent/test/extensibility/extension-source-authority.test.ts packages/coding-agent/test/extensibility/ext-model-query.test.ts packages/coding-agent/test/task/task-batch.test.ts
 exit 1
 23 pass
-27 fail
-145 expect() calls
-Ran 50 tests across 4 files. [6.33s]
+23 fail
+135 expect() calls
+Ran 46 tests across 4 files. [1285.00ms]
 ```
 
-All 27 failed tests name absent Phase 1 contracts. There were no unhandled fixture/load errors. One lifecycle test originally waited on the deliberately missing callback and hit Bun's timeout; it was tightened to assert `started === 1` before waiting. The targeted final check now fails immediately at that missing callback contract (`expected 1`, `received 0`, 73.64 ms), rather than by timeout.
+All 23 Phase 1 failures stop at absent Phase 1 contracts or their first observable behavior. The nested forwarding tests currently stop at the missing packaged descriptor; once that contract exists they continue through real `TaskTool` execution and real child `createAgentSession` reconstruction. No failure is a syntax, native-load, network, or paid-provider failure.
+
+## Phase 2 RED quarantine
+
+Strict preflight, lifecycle callbacks, and review-receipt contracts are intentionally isolated from the Phase 1 green gate in `packages/coding-agent/test/extensibility/task-router-phase2.test.ts`. The receipt seam test explicitly finalizes oversized raw writer output, creates a truncated preview, and requires receipt hashes, byte counts, retained writer bytes, and the trusted review frame to derive from the full finalized output instead of the preview.
+
+```text
+$ PI_COMPILED=1 /Users/eric/.cache/omp-bun/node_modules/.bin/bun test packages/coding-agent/test/extensibility/task-router-phase2.test.ts
+exit 1
+0 pass
+9 fail
+15 expect() calls
+Ran 9 tests across 1 file. [915.00ms]
+```
+
+These nine Phase 2 failures are recorded now but are not part of the Phase 1 green criterion. They cover strict effort/vendor/max-effort/live-auth preflight, delayed and failed lifecycle callbacks, once-only settlement, end-to-end writer/reviewer framing, and full-output receipt construction before UI preview truncation.
 
 No production file was changed. No provider or paid model call ran.

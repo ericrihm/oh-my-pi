@@ -53,11 +53,17 @@ const qwen = buildModel({
 const configured = [claude, gpt, kimi, qwen] as Model<Api>[];
 
 /** Minimal live-auth registry stub for the model facade and core resolver. */
-function registry(functionalProviders = new Set(configured.map(entry => entry.provider))): ModelRegistry {
+function registry(
+	functionalProviders = new Set(configured.map(entry => entry.provider)),
+	credentialChecks: string[] = [],
+): ModelRegistry {
 	return {
 		getAll: () => configured,
 		getAvailable: () => configured.filter(entry => functionalProviders.has(entry.provider)),
-		getApiKey: async (entry: Model<Api>) => (functionalProviders.has(entry.provider) ? "working-key" : undefined),
+		getApiKey: async (entry: Model<Api>) => {
+			credentialChecks.push(entry.provider);
+			return functionalProviders.has(entry.provider) ? "working-key" : undefined;
+		},
 	} as unknown as ModelRegistry;
 }
 
@@ -97,16 +103,15 @@ describe("createExtensionModelQuery", () => {
 		expect(q.family(claude)).not.toBe(q.family(gpt));
 	});
 
-	test("resolveSelection() derives stable Kimi and Qwen vendors across proxy providers and live auth", async () => {
-		const functionalProviders = new Set(configured.map(entry => entry.provider));
-		const q = createExtensionModelQuery(registry(functionalProviders), undefined, () => undefined);
-		const opaqueKimiFamily = q.family(kimi);
-		const opaqueQwenFamily = q.family(qwen);
+	test("resolveSelection() probes working credentials and derives Moonshot for functional proxied Kimi", async () => {
+		const credentialChecks: string[] = [];
+		const q = createExtensionModelQuery(registry(undefined, credentialChecks), undefined, () => undefined);
+		const opaqueFamily = q.family(kimi);
 
-		const kimiSelection = await q.resolveSelection("openrouter/moonshotai/kimi-k3:max");
-		const qwenSelection = await q.resolveSelection("together/qwen/qwen3.6-27b:high");
+		const selection = await q.resolveSelection("openrouter/moonshotai/kimi-k3:max");
 
-		expect(kimiSelection).toMatchObject({
+		expect(credentialChecks).toEqual(["openrouter"]);
+		expect(selection).toMatchObject({
 			model: kimi,
 			provider: "openrouter",
 			id: "moonshotai/kimi-k3",
@@ -114,7 +119,33 @@ describe("createExtensionModelQuery", () => {
 			authenticated: true,
 			vendorId: "moonshot",
 		});
-		expect(qwenSelection).toMatchObject({
+		expect(selection?.vendorId).not.toBe(selection?.provider);
+		expect(q.family(kimi)).toBe(opaqueFamily);
+	});
+
+	test("resolveSelection() reports configured Kimi nonfunctional after probing its credential", async () => {
+		const credentialChecks: string[] = [];
+		const functionalProviders = new Set(configured.map(entry => entry.provider));
+		functionalProviders.delete("openrouter");
+		const modelRegistry = registry(functionalProviders, credentialChecks);
+		const q = createExtensionModelQuery(modelRegistry, undefined, () => undefined);
+		expect(modelRegistry.getAvailable()).not.toContain(kimi);
+
+		const selection = await q.resolveSelection("openrouter/moonshotai/kimi-k3:max");
+
+		expect(credentialChecks).toEqual(["openrouter"]);
+		expect(selection).toMatchObject({ model: kimi, authenticated: false, vendorId: "moonshot" });
+	});
+
+	test("resolveSelection() probes working credentials and derives Alibaba for functional proxied Qwen", async () => {
+		const credentialChecks: string[] = [];
+		const q = createExtensionModelQuery(registry(undefined, credentialChecks), undefined, () => undefined);
+		const opaqueFamily = q.family(qwen);
+
+		const selection = await q.resolveSelection("together/qwen/qwen3.6-27b:high");
+
+		expect(credentialChecks).toEqual(["together"]);
+		expect(selection).toMatchObject({
 			model: qwen,
 			provider: "together",
 			id: "qwen/qwen3.6-27b",
@@ -122,19 +153,21 @@ describe("createExtensionModelQuery", () => {
 			authenticated: true,
 			vendorId: "alibaba",
 		});
-		expect(kimiSelection?.vendorId).not.toBe(kimiSelection?.provider);
-		expect(qwenSelection?.vendorId).not.toBe(qwenSelection?.provider);
-		expect(q.family(kimi)).toBe(opaqueKimiFamily);
-		expect(q.family(qwen)).toBe(opaqueQwenFamily);
+		expect(selection?.vendorId).not.toBe(selection?.provider);
+		expect(q.family(qwen)).toBe(opaqueFamily);
+	});
 
-		functionalProviders.delete("openrouter");
+	test("resolveSelection() reports configured Qwen nonfunctional after probing its credential", async () => {
+		const credentialChecks: string[] = [];
+		const functionalProviders = new Set(configured.map(entry => entry.provider));
 		functionalProviders.delete("together");
-		expect(await q.resolveSelection("openrouter/moonshotai/kimi-k3:max")).toMatchObject({ authenticated: false });
-		expect(await q.resolveSelection("together/qwen/qwen3.6-27b:high")).toMatchObject({ authenticated: false });
+		const modelRegistry = registry(functionalProviders, credentialChecks);
+		const q = createExtensionModelQuery(modelRegistry, undefined, () => undefined);
+		expect(modelRegistry.getAvailable()).not.toContain(qwen);
 
-		functionalProviders.add("openrouter");
-		functionalProviders.add("together");
-		expect(await q.resolveSelection("openrouter/moonshotai/kimi-k3:max")).toMatchObject({ authenticated: true });
-		expect(await q.resolveSelection("together/qwen/qwen3.6-27b:high")).toMatchObject({ authenticated: true });
+		const selection = await q.resolveSelection("together/qwen/qwen3.6-27b:high");
+
+		expect(credentialChecks).toEqual(["together"]);
+		expect(selection).toMatchObject({ model: qwen, authenticated: false, vendorId: "alibaba" });
 	});
 });
