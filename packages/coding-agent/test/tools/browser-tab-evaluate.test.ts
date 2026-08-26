@@ -45,6 +45,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser tab evaluation", () => {
 	it("clears request interception and held requests between runs, including thrown runs", async () => {
 		const server = Bun.serve({
 			port: 0,
+			hostname: "127.0.0.1",
 			fetch(request) {
 				const { pathname } = new URL(request.url);
 				if (pathname === "/held") return new Response("normal-held");
@@ -154,6 +155,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser tab evaluation", () => {
 	it("fires a once request handler exactly once and clears it between runs", async () => {
 		const server = Bun.serve({
 			port: 0,
+			hostname: "127.0.0.1",
 			fetch(request) {
 				const { pathname } = new URL(request.url);
 				if (pathname === "/mock") return new Response("normal-mock");

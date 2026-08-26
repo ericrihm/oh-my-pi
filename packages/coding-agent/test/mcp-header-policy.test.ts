@@ -9,7 +9,7 @@ let servers: Bun.Server<undefined>[] = [];
 function serve(
 	fetchHandler: (req: Request, server: Bun.Server<undefined>) => Response | Promise<Response>,
 ): Bun.Server<undefined> {
-	const server = Bun.serve({ port: 0, fetch: fetchHandler });
+	const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: fetchHandler });
 	servers.push(server);
 	return server;
 }

@@ -18,6 +18,7 @@ describe("legacy MCP HTTP+SSE transport", () => {
 
 		server = Bun.serve({
 			port: 0,
+			hostname: "127.0.0.1",
 			async fetch(req) {
 				const url = new URL(req.url);
 				if (req.method === "GET" && url.pathname === "/mcp/sse") {
@@ -87,6 +88,7 @@ describe("legacy MCP HTTP+SSE transport", () => {
 	it("rejects endpoint events that point at another origin", async () => {
 		server = Bun.serve({
 			port: 0,
+			hostname: "127.0.0.1",
 			fetch(req) {
 				const url = new URL(req.url);
 				if (req.method === "GET" && url.pathname === "/mcp/sse") {
@@ -114,6 +116,7 @@ describe("legacy MCP HTTP+SSE transport", () => {
 
 		server = Bun.serve({
 			port: 0,
+			hostname: "127.0.0.1",
 			async fetch(req) {
 				const url = new URL(req.url);
 				if (req.method === "GET" && url.pathname === "/mcp/sse") {

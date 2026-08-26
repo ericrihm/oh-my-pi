@@ -53,6 +53,7 @@ describe("MCP Streamable HTTP transport timeouts", () => {
 	it("keeps the request timeout active until a JSON response body is fully read", async () => {
 		server = Bun.serve({
 			port: 0,
+			hostname: "127.0.0.1",
 			fetch() {
 				return stalledBodyResponse('{"jsonrpc":"2.0","id":"', {
 					headers: { "Content-Type": "application/json" },
@@ -69,6 +70,7 @@ describe("MCP Streamable HTTP transport timeouts", () => {
 	it("keeps the notify timeout active while reading HTTP error bodies", async () => {
 		server = Bun.serve({
 			port: 0,
+			hostname: "127.0.0.1",
 			fetch() {
 				return stalledBodyResponse("partial failure body", {
 					status: 500,
@@ -86,6 +88,7 @@ describe("MCP Streamable HTTP transport timeouts", () => {
 	it("still resolves normal JSON response bodies", async () => {
 		server = Bun.serve({
 			port: 0,
+			hostname: "127.0.0.1",
 			fetch() {
 				return Response.json({
 					jsonrpc: "2.0",

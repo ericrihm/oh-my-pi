@@ -149,6 +149,7 @@ describe("pickElectronTarget", () => {
 			let requestCount = 0;
 			const server = Bun.serve({
 				port: 0,
+				hostname: "127.0.0.1",
 				fetch: () => {
 					requestCount++;
 					return new Promise<Response>(() => {});
